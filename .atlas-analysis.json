@@ -1,0 +1,126 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Caffeine",
+  "projectDescription": "A high performance, near optimal caching library for Java",
+  "theme": "mint",
+  "primaryColor": "#31c653",
+  "lightColor": null,
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "core/population",
+              "core/eviction",
+              "core/expiration",
+              "core/refresh",
+              "core/removal",
+              "core/statistics"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/cache-types",
+              "guides/async-caching",
+              "guides/computing",
+              "guides/testing",
+              "guides/performance"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/jcache",
+              "integrations/guava",
+              "integrations/spring",
+              "integrations/simulator"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/architecture",
+              "advanced/efficiency",
+              "advanced/benchmarks",
+              "advanced/migration"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core API",
+            "pages": [
+              "api/caffeine",
+              "api/cache",
+              "api/loading-cache",
+              "api/async-cache",
+              "api/async-loading-cache"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "api/cache-loader",
+              "api/weigher",
+              "api/expiry",
+              "api/removal-listener",
+              "api/stats-counter"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/policy",
+              "api/cache-stats",
+              "api/caffeine-spec"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Automatic loading of entries into cache, optionally asynchronously",
+    "Size-based eviction using frequency and recency (W-TinyLFU)",
+    "Time-based expiration measured since last access or last write",
+    "Asynchronous refresh when first stale request occurs",
+    "Keys and values wrapped in weak or soft references",
+    "Removal notifications for evicted entries",
+    "Write-through to external resources",
+    "Cache access statistics collection",
+    "JSR-107 JCache integration",
+    "Guava Cache adapter"
+  ],
+  "publicApiSurface": [
+    "Caffeine - Builder class for constructing cache instances",
+    "Cache<K,V> - Manual cache interface with get/put operations",
+    "LoadingCache<K,V> - Cache with automatic loading via CacheLoader",
+    "AsyncCache<K,V> - Asynchronous cache returning CompletableFuture",
+    "AsyncLoadingCache<K,V> - Async cache with automatic loading",
+    "CacheLoader<K,V> - Loads values for cache keys",
+    "AsyncCacheLoader<K,V> - Asynchronously loads values",
+    "Weigher<K,V> - Calculates weight of cache entries",
+    "Expiry<K,V> - Custom expiration policy per entry",
+    "RemovalListener<K,V> - Notified when entry is removed",
+    "Policy<K,V> - Access to eviction and expiration policies",
+    "CacheStats - Statistics about cache performance",
+    "StatsCounter - Records cache statistics",
+    "CaffeineSpec - Parses specification strings"
+  ]
+}
