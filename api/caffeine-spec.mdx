@@ -1,0 +1,590 @@
+---
+title: 'CaffeineSpec'
+description: 'String-based specification for configuring Caffeine cache builders'
+---
+
+## Overview
+
+`CaffeineSpec` provides a convenient way to configure `Caffeine` cache builders using a string specification. This is particularly useful for command-line configuration, external config files, or environment variables.
+
+## String Syntax
+
+The specification string consists of comma-separated key-value pairs:
+
+```
+maximumSize=10000,expireAfterWrite=10m,recordStats
+```
+
+### Supported Keys
+
+<ParamField path="initialCapacity" type="integer">
+  Sets initial capacity (e.g., `initialCapacity=100`)
+</ParamField>
+
+<ParamField path="maximumSize" type="long">
+  Sets maximum number of entries (e.g., `maximumSize=10000`)
+</ParamField>
+
+<ParamField path="maximumWeight" type="long">
+  Sets maximum total weight (e.g., `maximumWeight=50000`)
+</ParamField>
+
+<ParamField path="expireAfterAccess" type="duration">
+  Sets time-to-idle expiration (e.g., `expireAfterAccess=5m`)
+</ParamField>
+
+<ParamField path="expireAfterWrite" type="duration">
+  Sets time-to-live expiration (e.g., `expireAfterWrite=10m`)
+</ParamField>
+
+<ParamField path="refreshAfterWrite" type="duration">
+  Sets refresh interval (e.g., `refreshAfterWrite=1m`)
+</ParamField>
+
+<ParamField path="weakKeys" type="none">
+  Enables weak reference keys (no value)
+</ParamField>
+
+<ParamField path="weakValues" type="none">
+  Enables weak reference values (no value)
+</ParamField>
+
+<ParamField path="softValues" type="none">
+  Enables soft reference values (no value)
+</ParamField>
+
+<ParamField path="recordStats" type="none">
+  Enables statistics recording (no value)
+</ParamField>
+
+### Duration Format
+
+Durations can be specified in two formats:
+
+**Simple Format:** Number followed by unit
+- `d` - days
+- `h` - hours  
+- `m` - minutes
+- `s` - seconds
+
+**ISO-8601 Format:** Standard duration string
+- `PT15M` - 15 minutes
+- `PT2H` - 2 hours
+- `P1D` - 1 day
+
+**Examples:**
+```
+expireAfterWrite=10m
+expireAfterWrite=600s
+expireAfterWrite=PT10M
+```
+
+### Numeric Literals
+
+Underscores can be used as separators in numeric values:
+
+```
+maximumSize=10_000
+maximumWeight=50_000
+```
+
+## Parsing Specifications
+
+### parse
+
+Parses a specification string into a `CaffeineSpec` instance.
+
+```java
+static CaffeineSpec parse(String specification)
+```
+
+<ParamField path="specification" type="String" required>
+  The specification string to parse
+</ParamField>
+
+**Returns:** Parsed `CaffeineSpec` instance
+
+**Throws:** `IllegalArgumentException` if the specification is invalid
+
+**Example:**
+```java
+CaffeineSpec spec = CaffeineSpec.parse(
+    "maximumSize=10000,expireAfterWrite=10m,recordStats");
+```
+
+## Using with Caffeine
+
+### Direct String
+
+Build a cache directly from a specification string:
+
+```java
+Cache<String, User> cache = Caffeine.from(
+    "maximumSize=10000,expireAfterWrite=10m,recordStats"
+).build();
+```
+
+### From CaffeineSpec
+
+Build a cache from a parsed specification:
+
+```java
+CaffeineSpec spec = CaffeineSpec.parse(
+    "maximumSize=10000,expireAfterWrite=10m");
+
+Cache<String, User> cache = Caffeine.from(spec).build();
+```
+
+### Environment Variables
+
+Load configuration from environment:
+
+```java
+String spec = System.getenv("CACHE_SPEC");
+if (spec != null) {
+    cache = Caffeine.from(spec).build();
+} else {
+    cache = Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .build();
+}
+```
+
+### Configuration Files
+
+Load from properties file:
+
+```java
+Properties props = new Properties();
+props.load(new FileInputStream("cache.properties"));
+
+String spec = props.getProperty("cache.user.spec");
+Cache<String, User> userCache = Caffeine.from(spec).build();
+```
+
+**cache.properties:**
+```properties
+cache.user.spec=maximumSize=10000,expireAfterWrite=10m,recordStats
+cache.session.spec=maximumSize=5000,expireAfterAccess=30m
+```
+
+## Examples
+
+### Basic Configuration
+
+```java
+// Simple size-bounded cache
+Cache<String, String> cache = Caffeine.from(
+    "maximumSize=1000"
+).build();
+
+// With expiration
+Cache<String, User> cache = Caffeine.from(
+    "maximumSize=10000,expireAfterWrite=10m"
+).build();
+
+// With statistics
+Cache<String, Data> cache = Caffeine.from(
+    "maximumSize=5000,expireAfterAccess=5m,recordStats"
+).build();
+```
+
+### Advanced Configuration
+
+```java
+// Weight-based with expiration and refresh
+LoadingCache<String, User> cache = Caffeine.from(
+    "maximumWeight=100000,expireAfterWrite=1h,refreshAfterWrite=10m,recordStats"
+).weigher((key, value) -> value.size())
+ .build(key -> loadUser(key));
+
+// With weak references
+Cache<String, Image> cache = Caffeine.from(
+    "maximumSize=1000,weakKeys,softValues"
+).build();
+```
+
+### Multiple Durations
+
+```java
+// Different expiration strategies
+Cache<String, Session> cache = Caffeine.from(
+    "maximumSize=5000,expireAfterAccess=30m,expireAfterWrite=2h"
+).build();
+```
+
+### ISO-8601 Durations
+
+```java
+Cache<String, Data> cache = Caffeine.from(
+    "maximumSize=10000,expireAfterWrite=PT30M,refreshAfterWrite=PT5M"
+).build();
+```
+
+### Command-Line Configuration
+
+```java
+public static void main(String[] args) {
+    Options options = new Options();
+    options.addOption("c", "cache-spec", true, "Cache specification");
+    
+    CommandLineParser parser = new DefaultParser();
+    CommandLine cmd = parser.parse(options, args);
+    
+    String spec = cmd.getOptionValue("cache-spec", 
+        "maximumSize=10000,expireAfterWrite=10m");
+    
+    Cache<String, User> cache = Caffeine.from(spec).build();
+}
+```
+
+```bash
+java -jar app.jar --cache-spec "maximumSize=50000,expireAfterWrite=1h,recordStats"
+```
+
+### Spring Configuration
+
+```java
+@Configuration
+public class CacheConfig {
+    
+    @Value("${cache.user.spec}")
+    private String userCacheSpec;
+    
+    @Bean
+    public Cache<String, User> userCache() {
+        return Caffeine.from(userCacheSpec).build();
+    }
+}
+```
+
+**application.properties:**
+```properties
+cache.user.spec=maximumSize=10000,expireAfterWrite=10m,recordStats
+```
+
+### Dynamic Configuration
+
+```java
+public class CacheManager {
+    private final Map<String, Cache<String, Object>> caches = new ConcurrentHashMap<>();
+    
+    public Cache<String, Object> getCache(String name, String spec) {
+        return caches.computeIfAbsent(name, k -> {
+            try {
+                return Caffeine.from(spec).build();
+            } catch (IllegalArgumentException e) {
+                // Fall back to default
+                return Caffeine.newBuilder().maximumSize(1000).build();
+            }
+        });
+    }
+}
+```
+
+### Validation
+
+```java
+public class CacheSpecValidator {
+    
+    public static boolean isValid(String spec) {
+        try {
+            CaffeineSpec.parse(spec);
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+    
+    public static void validate(String spec) throws ValidationException {
+        try {
+            CaffeineSpec.parse(spec);
+        } catch (IllegalArgumentException e) {
+            throw new ValidationException("Invalid cache spec: " + e.getMessage(), e);
+        }
+    }
+}
+```
+
+## Constraints and Rules
+
+### Mutual Exclusions
+
+Certain keys cannot be used together:
+
+**Size vs Weight:**
+```java
+// ❌ Invalid - cannot specify both
+CaffeineSpec.parse("maximumSize=1000,maximumWeight=10000");
+// throws IllegalArgumentException
+
+// ✓ Valid - choose one
+CaffeineSpec.parse("maximumSize=1000");
+CaffeineSpec.parse("maximumWeight=10000");
+```
+
+**Weak vs Soft Values:**
+```java
+// ❌ Invalid - cannot specify both
+CaffeineSpec.parse("weakValues,softValues");
+// throws IllegalArgumentException
+
+// ✓ Valid - choose one
+CaffeineSpec.parse("weakValues");
+CaffeineSpec.parse("softValues");
+```
+
+### No Duplicates
+
+```java
+// ❌ Invalid - duplicate keys
+CaffeineSpec.parse("maximumSize=1000,maximumSize=2000");
+// throws IllegalArgumentException
+```
+
+### Required Values
+
+```java
+// ❌ Invalid - missing value
+CaffeineSpec.parse("maximumSize=");
+CaffeineSpec.parse("expireAfterWrite");
+// throws IllegalArgumentException
+
+// ❌ Invalid - unexpected value
+CaffeineSpec.parse("recordStats=true");
+CaffeineSpec.parse("weakKeys=yes");
+// throws IllegalArgumentException
+
+// ✓ Valid
+CaffeineSpec.parse("maximumSize=1000");
+CaffeineSpec.parse("recordStats");
+```
+
+### Negative Values
+
+```java
+// ❌ Invalid - negative values not allowed
+CaffeineSpec.parse("maximumSize=-1");
+CaffeineSpec.parse("expireAfterWrite=-5m");
+// throws IllegalArgumentException
+```
+
+### Whitespace
+
+Whitespace around keys, values, and delimiters is ignored:
+
+```java
+// All equivalent
+CaffeineSpec.parse("maximumSize=1000,expireAfterWrite=10m");
+CaffeineSpec.parse("maximumSize = 1000, expireAfterWrite = 10m");
+CaffeineSpec.parse("  maximumSize=1000  ,  expireAfterWrite=10m  ");
+```
+
+## Limitations
+
+Certain `Caffeine` builder methods are NOT supported by `CaffeineSpec`:
+
+<Warning>
+**Not Configurable via String:**
+- Custom `Weigher` implementations
+- Custom `Expiry` implementations  
+- Custom `RemovalListener`
+- Custom `CacheLoader`
+- Custom `Executor`
+- Custom `Ticker`
+- Custom `Scheduler`
+- Custom `StatsCounter`
+
+These must be configured programmatically after parsing.
+</Warning>
+
+**Example - Combining spec with programmatic config:**
+```java
+LoadingCache<String, User> cache = Caffeine.from(
+    "maximumWeight=100000,expireAfterWrite=10m,recordStats"
+)
+.weigher((String key, User user) -> user.size())
+.removalListener((key, value, cause) -> 
+    logger.info("Removed: {}", key))
+.build(key -> loadUser(key));
+```
+
+## Utility Methods
+
+### toParsableString
+
+Returns the original specification string.
+
+```java
+String toParsableString()
+```
+
+**Example:**
+```java
+CaffeineSpec spec = CaffeineSpec.parse("maximumSize=1000,recordStats");
+String str = spec.toParsableString();
+// str equals "maximumSize=1000,recordStats"
+
+// Round-trip parsing
+CaffeineSpec spec2 = CaffeineSpec.parse(str);
+assert spec.equals(spec2);
+```
+
+### equals / hashCode
+
+Compares specifications by their parsed values, not string representation.
+
+```java
+CaffeineSpec spec1 = CaffeineSpec.parse("maximumSize=1000,expireAfterWrite=10m");
+CaffeineSpec spec2 = CaffeineSpec.parse("expireAfterWrite=10m,maximumSize=1000");
+
+assert spec1.equals(spec2);  // Order doesn't matter
+assert spec1.hashCode() == spec2.hashCode();
+```
+
+## Complete Example
+
+Comprehensive usage with configuration management:
+
+```java
+public class ConfigurableCacheFactory {
+    
+    private static final String DEFAULT_SPEC = 
+        "maximumSize=10000,expireAfterWrite=10m";
+    
+    public static <K, V> Cache<K, V> createCache(
+            String name, 
+            Properties config) {
+        
+        // Get specification from config
+        String spec = config.getProperty(
+            "cache." + name + ".spec", 
+            DEFAULT_SPEC);
+        
+        // Validate
+        try {
+            CaffeineSpec.parse(spec);
+        } catch (IllegalArgumentException e) {
+            logger.error("Invalid cache spec for {}: {}", name, spec, e);
+            spec = DEFAULT_SPEC;
+        }
+        
+        // Build cache
+        Caffeine<K, V> builder = Caffeine.from(spec);
+        
+        // Add programmatic configuration
+        String removalListener = config.getProperty(
+            "cache." + name + ".removalListener");
+        if (removalListener != null) {
+            builder.removalListener((key, value, cause) -> 
+                handleRemoval(name, key, value, cause));
+        }
+        
+        return builder.build();
+    }
+    
+    private static void handleRemoval(
+            String cacheName, 
+            Object key, 
+            Object value, 
+            RemovalCause cause) {
+        logger.debug("Cache {}: Removed {} ({})", cacheName, key, cause);
+    }
+    
+    public static void main(String[] args) throws Exception {
+        Properties config = new Properties();
+        config.load(new FileInputStream("cache.properties"));
+        
+        Cache<String, User> userCache = createCache("user", config);
+        Cache<String, Session> sessionCache = createCache("session", config);
+        
+        // Use caches
+        userCache.put("john", new User("john"));
+    }
+}
+```
+
+**cache.properties:**
+```properties
+# User cache - large, long-lived
+cache.user.spec=maximumSize=50000,expireAfterWrite=1h,recordStats
+cache.user.removalListener=true
+
+# Session cache - smaller, short-lived
+cache.session.spec=maximumSize=10000,expireAfterAccess=30m,recordStats
+```
+
+## Best Practices
+
+1. **Use for external configuration** - Perfect for config files and environment variables:
+   ```java
+   String spec = System.getenv("CACHE_SPEC");
+   Cache<K, V> cache = Caffeine.from(spec).build();
+   ```
+
+2. **Validate early** - Check specifications at startup:
+   ```java
+   try {
+       CaffeineSpec.parse(spec);
+   } catch (IllegalArgumentException e) {
+       logger.error("Invalid cache configuration", e);
+       System.exit(1);
+   }
+   ```
+
+3. **Provide defaults** - Always have fallback configuration:
+   ```java
+   String spec = config.getProperty("cache.spec", DEFAULT_SPEC);
+   ```
+
+4. **Document limitations** - Remember that complex configurations require programmatic setup
+
+5. **Use underscores for readability** - Make large numbers clearer:
+   ```
+   maximumSize=1_000_000
+   ```
+
+6. **Store original spec** - Keep specification string for debugging:
+   ```java
+   CaffeineSpec spec = CaffeineSpec.parse(configString);
+   logger.info("Cache configured with: {}", spec.toParsableString());
+   ```
+
+7. **Test round-trip parsing** - Ensure specifications survive serialization:
+   ```java
+   CaffeineSpec original = CaffeineSpec.parse(spec);
+   CaffeineSpec parsed = CaffeineSpec.parse(original.toParsableString());
+   assert original.equals(parsed);
+   ```
+
+## Error Handling
+
+```java
+public class SafeCacheBuilder {
+    
+    public static <K, V> Cache<K, V> buildSafe(
+            String spec, 
+            Cache<K, V> defaultCache) {
+        try {
+            return Caffeine.from(spec).build();
+        } catch (IllegalArgumentException e) {
+            logger.error("Failed to parse cache spec: {}", spec, e);
+            return defaultCache;
+        }
+    }
+    
+    public static Optional<CaffeineSpec> parseSafe(String spec) {
+        try {
+            return Optional.of(CaffeineSpec.parse(spec));
+        } catch (IllegalArgumentException e) {
+            logger.warn("Invalid cache spec: {}", spec);
+            return Optional.empty();
+        }
+    }
+}
+```
+
+## See Also
+
+- [Caffeine](/api/caffeine) - Cache builder API
+- [Cache](/api/cache) - Cache interface

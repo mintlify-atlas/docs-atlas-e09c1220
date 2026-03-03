@@ -1,0 +1,537 @@
+---
+title: StatsCounter
+description: Interface for accumulating cache statistics during cache operations
+---
+
+## Overview
+
+`StatsCounter` accumulates statistics during the operation of a cache for presentation by `Cache.stats()`. It tracks hits, misses, load success/failure, evictions, and load times.
+
+Implement this interface to customize how statistics are collected, or to integrate cache metrics with external monitoring systems.
+
+## Methods
+
+### recordHits
+
+```java
+void recordHits(int count)
+```
+
+Records cache hits. Called when cache requests return cached values.
+
+<ParamField path="count" type="int" required>
+  The number of hits to record
+</ParamField>
+
+### recordMisses
+
+```java
+void recordMisses(int count)
+```
+
+Records cache misses. Called when cache requests return values not found in the cache.
+
+<ParamField path="count" type="int" required>
+  The number of misses to record
+</ParamField>
+
+<Info>
+  This method is called by the loading thread and by threads blocking on the load. Multiple concurrent calls with the same key should result in a single load operation but multiple miss recordings.
+</Info>
+
+### recordLoadSuccess
+
+```java
+void recordLoadSuccess(long loadTime)
+```
+
+Records the successful load of a new entry. Called only by the loading thread when loading completes successfully.
+
+<ParamField path="loadTime" type="long" required>
+  The number of nanoseconds the cache spent computing or retrieving the new value
+</ParamField>
+
+<Note>
+  In contrast to `recordMisses()`, this method is called only once per load operation by the loading thread.
+</Note>
+
+### recordLoadFailure
+
+```java
+void recordLoadFailure(long loadTime)
+```
+
+Records the failed load of a new entry. Called when loading throws an exception or returns null.
+
+<ParamField path="loadTime" type="long" required>
+  The number of nanoseconds spent before discovering the value doesn't exist or an exception was thrown
+</ParamField>
+
+### recordEviction
+
+```java
+void recordEviction(int weight, RemovalCause cause)
+```
+
+Records the eviction of an entry from the cache. Called only for automatic evictions, not manual invalidations.
+
+<ParamField path="weight" type="int" required>
+  The weight of the evicted entry
+</ParamField>
+
+<ParamField path="cause" type="RemovalCause" required>
+  The reason for which the entry was removed
+</ParamField>
+
+<Warning>
+  This is only called for evictions due to the cache's eviction strategy, not for manual `invalidate()` operations.
+</Warning>
+
+### snapshot
+
+```java
+CacheStats snapshot()
+```
+
+Returns a snapshot of this counter's values. The view may be inconsistent as it can be interleaved with update operations.
+
+<ResponseField name="return" type="CacheStats">
+  A snapshot of this counter's values including hit rate, miss rate, load times, eviction count, etc.
+</ResponseField>
+
+<Note>
+  The values are undefined in case of overflow, though no exceptions will be thrown. Implement custom handling if specific overflow behavior is required.
+</Note>
+
+### disabledStatsCounter (Static Factory)
+
+```java
+static StatsCounter disabledStatsCounter()
+```
+
+Returns an accumulator that does not record any cache events. Used internally when statistics are disabled.
+
+<ResponseField name="return" type="StatsCounter">
+  An accumulator that does not record metrics
+</ResponseField>
+
+### guardedStatsCounter (Static Factory)
+
+```java
+static StatsCounter guardedStatsCounter(StatsCounter statsCounter)
+```
+
+Returns an accumulator that suppresses and logs any exceptions thrown by the delegate.
+
+<ParamField path="statsCounter" type="StatsCounter" required>
+  The accumulator to delegate to
+</ParamField>
+
+<ResponseField name="return" type="StatsCounter">
+  An accumulator that wraps the delegate with exception handling
+</ResponseField>
+
+## Configuration
+
+Enable statistics collection using the Caffeine builder:
+
+```java
+// Built-in statistics
+Cache<Key, Value> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .recordStats()
+    .build();
+
+CacheStats stats = cache.stats();
+System.out.println("Hit rate: " + stats.hitRate());
+```
+
+For custom statistics collection:
+
+```java
+Cache<Key, Value> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .recordStats(() -> new MyCustomStatsCounter())
+    .build();
+```
+
+## Implementation Examples
+
+### Custom Stats Counter
+
+```java
+public class CustomStatsCounter implements StatsCounter {
+    private final LongAdder hitCount = new LongAdder();
+    private final LongAdder missCount = new LongAdder();
+    private final LongAdder loadSuccessCount = new LongAdder();
+    private final LongAdder loadFailureCount = new LongAdder();
+    private final LongAdder totalLoadTime = new LongAdder();
+    private final LongAdder evictionCount = new LongAdder();
+    private final LongAdder evictionWeight = new LongAdder();
+    
+    @Override
+    public void recordHits(int count) {
+        hitCount.add(count);
+    }
+    
+    @Override
+    public void recordMisses(int count) {
+        missCount.add(count);
+    }
+    
+    @Override
+    public void recordLoadSuccess(long loadTime) {
+        loadSuccessCount.increment();
+        totalLoadTime.add(loadTime);
+    }
+    
+    @Override
+    public void recordLoadFailure(long loadTime) {
+        loadFailureCount.increment();
+        totalLoadTime.add(loadTime);
+    }
+    
+    @Override
+    public void recordEviction(int weight, RemovalCause cause) {
+        evictionCount.increment();
+        evictionWeight.add(weight);
+    }
+    
+    @Override
+    public CacheStats snapshot() {
+        return CacheStats.of(
+            hitCount.sum(),
+            missCount.sum(),
+            loadSuccessCount.sum(),
+            loadFailureCount.sum(),
+            totalLoadTime.sum(),
+            evictionCount.sum(),
+            evictionWeight.sum()
+        );
+    }
+}
+
+Cache<String, Data> cache = Caffeine.newBuilder()
+    .recordStats(CustomStatsCounter::new)
+    .build();
+```
+
+### Micrometer Integration
+
+```java
+public class MicrometerStatsCounter implements StatsCounter {
+    private final Counter hits;
+    private final Counter misses;
+    private final Counter loadSuccesses;
+    private final Counter loadFailures;
+    private final Timer loadTimer;
+    private final Counter evictions;
+    
+    public MicrometerStatsCounter(MeterRegistry registry, String cacheName) {
+        Tags tags = Tags.of("cache", cacheName);
+        
+        this.hits = Counter.builder("cache.gets")
+            .tags(tags.and("result", "hit"))
+            .register(registry);
+            
+        this.misses = Counter.builder("cache.gets")
+            .tags(tags.and("result", "miss"))
+            .register(registry);
+            
+        this.loadSuccesses = Counter.builder("cache.loads")
+            .tags(tags.and("result", "success"))
+            .register(registry);
+            
+        this.loadFailures = Counter.builder("cache.loads")
+            .tags(tags.and("result", "failure"))
+            .register(registry);
+            
+        this.loadTimer = Timer.builder("cache.load.duration")
+            .tags(tags)
+            .register(registry);
+            
+        this.evictions = Counter.builder("cache.evictions")
+            .tags(tags)
+            .register(registry);
+    }
+    
+    @Override
+    public void recordHits(int count) {
+        hits.increment(count);
+    }
+    
+    @Override
+    public void recordMisses(int count) {
+        misses.increment(count);
+    }
+    
+    @Override
+    public void recordLoadSuccess(long loadTime) {
+        loadSuccesses.increment();
+        loadTimer.record(loadTime, TimeUnit.NANOSECONDS);
+    }
+    
+    @Override
+    public void recordLoadFailure(long loadTime) {
+        loadFailures.increment();
+        loadTimer.record(loadTime, TimeUnit.NANOSECONDS);
+    }
+    
+    @Override
+    public void recordEviction(int weight, RemovalCause cause) {
+        evictions.increment();
+    }
+    
+    @Override
+    public CacheStats snapshot() {
+        return CacheStats.empty(); // Micrometer handles reporting
+    }
+}
+
+MeterRegistry registry = new SimpleMeterRegistry();
+
+Cache<String, Data> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .recordStats(() -> new MicrometerStatsCounter(registry, "myCache"))
+    .build();
+```
+
+### Per-Cause Eviction Tracking
+
+```java
+public class DetailedStatsCounter implements StatsCounter {
+    private final ConcurrentStatsCounter delegate = new ConcurrentStatsCounter();
+    private final Map<RemovalCause, LongAdder> evictionsByCause = new ConcurrentHashMap<>();
+    
+    @Override
+    public void recordHits(int count) {
+        delegate.recordHits(count);
+    }
+    
+    @Override
+    public void recordMisses(int count) {
+        delegate.recordMisses(count);
+    }
+    
+    @Override
+    public void recordLoadSuccess(long loadTime) {
+        delegate.recordLoadSuccess(loadTime);
+    }
+    
+    @Override
+    public void recordLoadFailure(long loadTime) {
+        delegate.recordLoadFailure(loadTime);
+    }
+    
+    @Override
+    public void recordEviction(int weight, RemovalCause cause) {
+        delegate.recordEviction(weight, cause);
+        evictionsByCause.computeIfAbsent(cause, k -> new LongAdder()).increment();
+    }
+    
+    @Override
+    public CacheStats snapshot() {
+        return delegate.snapshot();
+    }
+    
+    public Map<RemovalCause, Long> getEvictionsByCause() {
+        return evictionsByCause.entrySet().stream()
+            .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().sum()));
+    }
+}
+```
+
+### Logging Stats Counter
+
+```java
+public class LoggingStatsCounter implements StatsCounter {
+    private static final Logger logger = LoggerFactory.getLogger(LoggingStatsCounter.class);
+    private final StatsCounter delegate = new ConcurrentStatsCounter();
+    private final String cacheName;
+    
+    public LoggingStatsCounter(String cacheName) {
+        this.cacheName = cacheName;
+    }
+    
+    @Override
+    public void recordHits(int count) {
+        delegate.recordHits(count);
+        logger.trace("[{}] Recorded {} hits", cacheName, count);
+    }
+    
+    @Override
+    public void recordMisses(int count) {
+        delegate.recordMisses(count);
+        logger.trace("[{}] Recorded {} misses", cacheName, count);
+    }
+    
+    @Override
+    public void recordLoadSuccess(long loadTime) {
+        delegate.recordLoadSuccess(loadTime);
+        logger.debug("[{}] Load success in {} ms", 
+            cacheName, TimeUnit.NANOSECONDS.toMillis(loadTime));
+    }
+    
+    @Override
+    public void recordLoadFailure(long loadTime) {
+        delegate.recordLoadFailure(loadTime);
+        logger.warn("[{}] Load failure after {} ms", 
+            cacheName, TimeUnit.NANOSECONDS.toMillis(loadTime));
+    }
+    
+    @Override
+    public void recordEviction(int weight, RemovalCause cause) {
+        delegate.recordEviction(weight, cause);
+        logger.debug("[{}] Eviction: weight={}, cause={}", cacheName, weight, cause);
+    }
+    
+    @Override
+    public CacheStats snapshot() {
+        return delegate.snapshot();
+    }
+}
+```
+
+### Threshold-Based Alerting
+
+```java
+public class AlertingStatsCounter implements StatsCounter {
+    private final StatsCounter delegate = new ConcurrentStatsCounter();
+    private final LongAdder totalRequests = new LongAdder();
+    private final LongAdder hits = new LongAdder();
+    private final double minHitRate;
+    private final Consumer<String> alertHandler;
+    
+    public AlertingStatsCounter(double minHitRate, Consumer<String> alertHandler) {
+        this.minHitRate = minHitRate;
+        this.alertHandler = alertHandler;
+    }
+    
+    @Override
+    public void recordHits(int count) {
+        delegate.recordHits(count);
+        hits.add(count);
+        totalRequests.add(count);
+        checkHitRate();
+    }
+    
+    @Override
+    public void recordMisses(int count) {
+        delegate.recordMisses(count);
+        totalRequests.add(count);
+        checkHitRate();
+    }
+    
+    private void checkHitRate() {
+        long total = totalRequests.sum();
+        if (total > 1000) { // Only check after sufficient samples
+            double hitRate = (double) hits.sum() / total;
+            if (hitRate < minHitRate) {
+                alertHandler.accept(String.format(
+                    "Cache hit rate (%.2f%%) below threshold (%.2f%%)",
+                    hitRate * 100, minHitRate * 100));
+            }
+        }
+    }
+    
+    @Override
+    public void recordLoadSuccess(long loadTime) {
+        delegate.recordLoadSuccess(loadTime);
+    }
+    
+    @Override
+    public void recordLoadFailure(long loadTime) {
+        delegate.recordLoadFailure(loadTime);
+    }
+    
+    @Override
+    public void recordEviction(int weight, RemovalCause cause) {
+        delegate.recordEviction(weight, cause);
+    }
+    
+    @Override
+    public CacheStats snapshot() {
+        return delegate.snapshot();
+    }
+}
+
+Cache<String, Data> cache = Caffeine.newBuilder()
+    .recordStats(() -> new AlertingStatsCounter(0.8, alert -> {
+        logger.error("CACHE ALERT: {}", alert);
+        metrics.alertTriggered("low_hit_rate");
+    }))
+    .build();
+```
+
+## Best Practices
+
+### Do's
+
+- Use thread-safe data structures (LongAdder, AtomicLong, etc.)
+- Keep recording methods fast and non-blocking
+- Delegate to built-in implementations when possible
+- Use `guardedStatsCounter()` to wrap custom implementations
+- Consider memory overhead of custom statistics
+- Provide accurate snapshots for monitoring
+
+### Don'ts
+
+- Don't perform expensive operations in recording methods
+- Avoid blocking I/O or synchronous external calls
+- Don't throw uncaught exceptions
+- Avoid excessive synchronization
+- Don't store unbounded amounts of data
+- Avoid complex computations in hot paths
+
+## Thread Safety
+
+All methods in `StatsCounter` must be thread-safe as they are called concurrently by multiple threads:
+
+```java
+public class ThreadSafeStatsCounter implements StatsCounter {
+    // Use LongAdder for better concurrent performance than AtomicLong
+    private final LongAdder hitCount = new LongAdder();
+    private final LongAdder missCount = new LongAdder();
+    
+    @Override
+    public void recordHits(int count) {
+        hitCount.add(count); // Thread-safe increment
+    }
+    
+    @Override
+    public void recordMisses(int count) {
+        missCount.add(count); // Thread-safe increment
+    }
+    
+    // ... other methods
+}
+```
+
+## When to Use
+
+Implement a custom `StatsCounter` when:
+
+- You need to integrate with external monitoring systems (Prometheus, Micrometer, etc.)
+- You want to collect additional metrics beyond the built-in statistics
+- You need real-time alerting based on cache performance
+- You want to track metrics per removal cause or other dimensions
+- You need to export metrics in a specific format
+- You want custom aggregation or reporting logic
+
+Use the built-in statistics when:
+
+- Standard metrics (hit rate, miss rate, load time) are sufficient
+- You don't need integration with external systems
+- Performance is critical (built-in is optimized)
+- You want simple, out-of-the-box statistics
+
+## Related Interfaces
+
+- [Caffeine Builder](/api/caffeine) - Configuration with `recordStats()`
+- [CacheStats](/api/cache-stats) - Statistics snapshot class
+- [RemovalListener](/api/removal-listener) - Listen to removals
+
+## See Also
+
+- [Statistics](/core/statistics) - Using cache statistics
+- [Performance](/guides/performance) - Performance considerations

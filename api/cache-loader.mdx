@@ -1,0 +1,325 @@
+---
+title: CacheLoader
+description: Interface for loading cache values automatically when keys are accessed
+---
+
+## Overview
+
+`CacheLoader` computes or retrieves values based on a key for use in populating a `LoadingCache` or `AsyncLoadingCache`. It extends `AsyncCacheLoader` and provides both synchronous and asynchronous loading capabilities.
+
+Most implementations only need to implement the `load()` method. Other methods can be overridden as needed for bulk loading or custom refresh behavior.
+
+## Type Parameters
+
+<ParamField path="K" type="type parameter">
+  The type of keys
+</ParamField>
+
+<ParamField path="V" type="type parameter">
+  The type of values. A loader may return null values if and only if it declares a nullable value type. Null values are never stored in the cache.
+</ParamField>
+
+## Methods
+
+### load
+
+```java
+V load(K key) throws Exception
+```
+
+Computes or retrieves the value corresponding to the specified key.
+
+<ParamField path="key" type="K" required>
+  The non-null key whose value should be loaded
+</ParamField>
+
+<ResponseField name="return" type="V">
+  The value associated with the key, or null if not found
+</ResponseField>
+
+<Warning>
+  Loading **must not** attempt to update any mappings of this cache directly.
+</Warning>
+
+**Throws:**
+- `Exception` or `Error` - in which case the mapping is unchanged
+- `InterruptedException` - if the method is interrupted. The thread's interrupt status is set when caught.
+
+### loadAll
+
+```java
+default Map<? extends K, ? extends V> loadAll(Set<? extends K> keys) throws Exception
+```
+
+Computes or retrieves the values corresponding to multiple keys. Called by `LoadingCache.getAll()`.
+
+<ParamField path="keys" type="Set<? extends K>" required>
+  The unique, non-null keys whose values should be loaded
+</ParamField>
+
+<ResponseField name="return" type="Map<? extends K, ? extends V>">
+  A map from each key to its associated value. May not contain null values.
+</ResponseField>
+
+<Info>
+  Override this method when bulk retrieval is significantly more efficient than many individual lookups. If not overridden, `LoadingCache.getAll()` will defer to individual `get()` calls.
+</Info>
+
+**Behavior:**
+- If the returned map doesn't contain all requested keys, partial results will be cached
+- If the returned map contains extra keys not in the request, all entries will be cached but only requested keys returned
+
+### asyncLoad
+
+```java
+default CompletableFuture<? extends V> asyncLoad(K key, Executor executor) throws Exception
+```
+
+Asynchronously computes or retrieves the value corresponding to a key.
+
+<ParamField path="key" type="K" required>
+  The non-null key whose value should be loaded
+</ParamField>
+
+<ParamField path="executor" type="Executor" required>
+  The executor that asynchronously loads the entry
+</ParamField>
+
+<ResponseField name="return" type="CompletableFuture<? extends V>">
+  The future value associated with the key
+</ResponseField>
+
+The default implementation wraps the synchronous `load()` method in a CompletableFuture.
+
+### asyncLoadAll
+
+```java
+default CompletableFuture<? extends Map<? extends K, ? extends V>> asyncLoadAll(
+    Set<? extends K> keys, Executor executor) throws Exception
+```
+
+Asynchronously computes or retrieves values for multiple keys. Called by `AsyncLoadingCache.getAll()`.
+
+<ParamField path="keys" type="Set<? extends K>" required>
+  The unique, non-null keys whose values should be loaded
+</ParamField>
+
+<ParamField path="executor" type="Executor" required>
+  The executor that asynchronously loads the entries
+</ParamField>
+
+<ResponseField name="return" type="CompletableFuture<? extends Map<? extends K, ? extends V>>">
+  A future containing the map from each key to its associated value
+</ResponseField>
+
+### reload
+
+```java
+default V reload(K key, V oldValue) throws Exception
+```
+
+Computes or retrieves a replacement value for an already-cached key. Called during refresh operations.
+
+<ParamField path="key" type="K" required>
+  The non-null key whose value should be reloaded
+</ParamField>
+
+<ParamField path="oldValue" type="V" required>
+  The non-null old value corresponding to the key
+</ParamField>
+
+<ResponseField name="return" type="V">
+  The new value associated with the key, or null to remove the mapping
+</ResponseField>
+
+<Warning>
+  Loading **must not** attempt to update any mappings of this cache directly or block waiting for other cache operations to complete.
+</Warning>
+
+<Note>
+  All exceptions thrown by this method will be logged and then swallowed.
+</Note>
+
+The default implementation delegates to `load(key)`.
+
+### asyncReload
+
+```java
+default CompletableFuture<? extends V> asyncReload(
+    K key, V oldValue, Executor executor) throws Exception
+```
+
+Asynchronously computes or retrieves a replacement value for an already-cached key.
+
+<ParamField path="key" type="K" required>
+  The non-null key whose value should be reloaded
+</ParamField>
+
+<ParamField path="oldValue" type="V" required>
+  The non-null old value corresponding to the key
+</ParamField>
+
+<ParamField path="executor" type="Executor" required>
+  The executor with which the entry is asynchronously loaded
+</ParamField>
+
+<ResponseField name="return" type="CompletableFuture<? extends V>">
+  A future containing the new value, or null to remove the mapping
+</ResponseField>
+
+### bulk (Static Factory)
+
+```java
+static <K, V> CacheLoader<K, V> bulk(
+    Function<? super Set<? extends K>, ? extends Map<? extends K, ? extends V>> mappingFunction)
+```
+
+Returns a cache loader that delegates to the supplied mapping function for bulk retrieval.
+
+<ParamField path="mappingFunction" type="Function" required>
+  The function to compute the values from a set of keys
+</ParamField>
+
+<ResponseField name="return" type="CacheLoader<K, V>">
+  A cache loader that delegates to the supplied mapping function
+</ResponseField>
+
+<Note>
+  The `load()` method will silently discard any additional mappings loaded when retrieving the key prior to returning the value to the cache.
+</Note>
+
+## Configuration
+
+Configure a `CacheLoader` using the Caffeine builder:
+
+```java
+// Basic loader
+LoadingCache<Key, Graph> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .build(key -> createExpensiveGraph(key));
+
+// Bulk loader
+LoadingCache<Key, Graph> bulkCache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .build(CacheLoader.bulk(keys -> loadGraphsFromDatabase(keys)));
+
+// Custom loader with reload
+LoadingCache<Key, Graph> customCache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .refreshAfterWrite(1, TimeUnit.MINUTES)
+    .build(new CacheLoader<Key, Graph>() {
+        @Override
+        public Graph load(Key key) throws Exception {
+            return createExpensiveGraph(key);
+        }
+        
+        @Override
+        public Graph reload(Key key, Graph oldValue) throws Exception {
+            // Use old value to optimize reload
+            return refreshGraph(key, oldValue);
+        }
+    });
+```
+
+## Implementation Examples
+
+### Simple Loader
+
+```java
+CacheLoader<String, User> loader = key -> database.getUserById(key);
+
+LoadingCache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .expireAfterWrite(10, TimeUnit.MINUTES)
+    .build(loader);
+```
+
+### Bulk Loader
+
+```java
+CacheLoader<String, User> bulkLoader = CacheLoader.bulk(keys -> {
+    // Load all users in a single database query
+    List<User> users = database.getUsersByIds(keys);
+    return users.stream()
+        .collect(Collectors.toMap(User::getId, Function.identity()));
+});
+
+LoadingCache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .build(bulkLoader);
+```
+
+### Custom Reload Logic
+
+```java
+CacheLoader<String, Data> loader = new CacheLoader<>() {
+    @Override
+    public Data load(String key) throws Exception {
+        return fetchDataFromSource(key);
+    }
+    
+    @Override
+    public Data reload(String key, Data oldValue) throws Exception {
+        // Check if data has changed before full reload
+        long remoteVersion = getRemoteVersion(key);
+        if (oldValue.getVersion() >= remoteVersion) {
+            return oldValue; // No changes, keep existing
+        }
+        return load(key); // Reload updated data
+    }
+};
+
+LoadingCache<String, Data> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .refreshAfterWrite(5, TimeUnit.MINUTES)
+    .build(loader);
+```
+
+### Async Loader
+
+```java
+AsyncCacheLoader<String, User> asyncLoader = (key, executor) -> 
+    CompletableFuture.supplyAsync(() -> database.getUserById(key), executor);
+
+AsyncLoadingCache<String, User> asyncCache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .buildAsync(asyncLoader);
+```
+
+## Best Practices
+
+### Do's
+
+- Implement only `load()` for simple use cases
+- Override `loadAll()` when bulk loading is more efficient
+- Use `reload()` to optimize refresh operations with existing values
+- Return null to indicate a missing value
+- Handle exceptions appropriately to control cache behavior
+
+### Don'ts
+
+- Never update cache mappings directly from within a loader
+- Don't block on other cache operations in `reload()` or `asyncReload()`
+- Avoid heavy computation in `reload()` - it's called asynchronously
+- Don't return null values in the map from `loadAll()`
+
+## When to Use
+
+Use `CacheLoader` when:
+
+- You want automatic loading of values on cache misses
+- You have a consistent way to compute or fetch values
+- You want to simplify cache population logic
+- You need bulk loading capabilities for efficiency
+- You want to use `LoadingCache.get()` instead of `Cache.get(key, loader)`
+
+## Related Interfaces
+
+- [LoadingCache](/api/loading-cache) - Cache that uses a CacheLoader
+- [AsyncLoadingCache](/api/async-loading-cache) - Async cache that uses a loader
+
+## See Also
+
+- [Caffeine Builder](/api/caffeine) - For cache configuration
+- [Statistics](/core/statistics) - Tracking load performance
+- [Refresh](/core/refresh) - Automatic background refresh

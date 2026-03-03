@@ -1,0 +1,671 @@
+---
+title: 'Policy'
+description: 'Interface for inspecting and performing low-level operations on cache policies'
+---
+
+## Overview
+
+The `Policy` interface provides access to low-level operations for inspecting and manipulating cache behavior based on runtime characteristics. It exposes optional sub-policies for eviction, expiration, and refresh based on how the cache was configured.
+
+## Accessing Policy
+
+Obtain the policy interface from any cache instance:
+
+```java
+Cache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .expireAfterWrite(Duration.ofMinutes(10))
+    .build();
+
+Policy<String, User> policy = cache.policy();
+```
+
+## Core Methods
+
+### isRecordingStats
+
+Checks if cache statistics are being recorded.
+
+```java
+boolean isRecordingStats()
+```
+
+**Returns:** `true` if statistics are being accumulated, `false` otherwise
+
+**Example:**
+```java
+if (policy.isRecordingStats()) {
+    CacheStats stats = cache.stats();
+    System.out.println("Hit rate: " + stats.hitRate());
+}
+```
+
+### getIfPresentQuietly
+
+Retrieves a value without side effects (no stats updates, no expiration reset, no refresh trigger).
+
+```java
+V getIfPresentQuietly(K key)
+```
+
+<ParamField path="key" type="K" required>
+  The key to look up
+</ParamField>
+
+**Returns:** The cached value, or `null` if not present
+
+**Example:**
+```java
+// Check if key exists without affecting cache behavior
+User user = policy.getIfPresentQuietly("john");
+if (user != null) {
+    // Value exists but stats weren't updated
+}
+```
+
+### getEntryIfPresentQuietly
+
+Retrieves a cache entry with metadata without side effects.
+
+```java
+CacheEntry<K, V> getEntryIfPresentQuietly(K key)
+```
+
+<ParamField path="key" type="K" required>
+  The key to look up
+</ParamField>
+
+**Returns:** The cache entry with metadata, or `null` if not present
+
+**Example:**
+```java
+CacheEntry<String, User> entry = policy.getEntryIfPresentQuietly("john");
+if (entry != null) {
+    System.out.println("Value: " + entry.getValue());
+    System.out.println("Weight: " + entry.weight());
+    System.out.println("Expires in: " + entry.expiresAfter());
+}
+```
+
+### refreshes
+
+Returns a snapshot of in-flight refresh operations.
+
+```java
+Map<K, CompletableFuture<V>> refreshes()
+```
+
+**Returns:** Unmodifiable map of keys to their refresh futures
+
+**Example:**
+```java
+Map<String, CompletableFuture<User>> pending = policy.refreshes();
+System.out.println("Refreshing " + pending.size() + " entries");
+```
+
+## Sub-Policies
+
+### eviction
+
+Access eviction policy operations for size/weight-bounded caches.
+
+```java
+Optional<Eviction<K, V>> eviction()
+```
+
+**Returns:** Eviction policy if configured, empty otherwise
+
+**Example:**
+```java
+policy.eviction().ifPresent(eviction -> {
+    System.out.println("Max size: " + eviction.getMaximum());
+    System.out.println("Is weighted: " + eviction.isWeighted());
+    
+    // Get coldest entries
+    Map<String, User> coldest = eviction.coldest(10);
+    
+    // Adjust maximum size
+    eviction.setMaximum(20_000);
+});
+```
+
+### expireAfterAccess
+
+Access time-to-idle expiration policy.
+
+```java
+Optional<FixedExpiration<K, V>> expireAfterAccess()
+```
+
+**Returns:** Access expiration policy if configured, empty otherwise
+
+**Example:**
+```java
+policy.expireAfterAccess().ifPresent(expiration -> {
+    Duration current = expiration.getExpiresAfter();
+    System.out.println("Current TTI: " + current);
+    
+    // Change expiration dynamically
+    expiration.setExpiresAfter(Duration.ofMinutes(30));
+    
+    // Check entry age
+    Optional<Duration> age = expiration.ageOf("john");
+    age.ifPresent(a -> System.out.println("Age: " + a));
+});
+```
+
+### expireAfterWrite
+
+Access time-to-live expiration policy.
+
+```java
+Optional<FixedExpiration<K, V>> expireAfterWrite()
+```
+
+**Returns:** Write expiration policy if configured, empty otherwise
+
+**Example:**
+```java
+policy.expireAfterWrite().ifPresent(expiration -> {
+    Duration ttl = expiration.getExpiresAfter();
+    Map<String, User> oldest = expiration.oldest(5);
+});
+```
+
+### expireVariably
+
+Access variable expiration policy for per-entry TTL.
+
+```java
+Optional<VarExpiration<K, V>> expireVariably()
+```
+
+**Returns:** Variable expiration policy if configured, empty otherwise
+
+**Example:**
+```java
+policy.expireVariably().ifPresent(expiration -> {
+    // Set custom expiration for specific entry
+    expiration.setExpiresAfter("premium-user", Duration.ofHours(24));
+    expiration.setExpiresAfter("basic-user", Duration.ofHours(1));
+    
+    // Put with custom duration
+    expiration.put("temp-key", value, Duration.ofMinutes(5));
+});
+```
+
+### refreshAfterWrite
+
+Access refresh policy for automatic reloading.
+
+```java
+Optional<FixedRefresh<K, V>> refreshAfterWrite()
+```
+
+**Returns:** Refresh policy if configured, empty otherwise
+
+**Example:**
+```java
+policy.refreshAfterWrite().ifPresent(refresh -> {
+    Duration interval = refresh.getRefreshesAfter();
+    refresh.setRefreshesAfter(Duration.ofMinutes(15));
+});
+```
+
+## Eviction Policy
+
+The `Eviction<K, V>` interface provides operations for size-bounded caches.
+
+### isWeighted
+
+Checks if the cache uses weighted eviction.
+
+```java
+boolean isWeighted()
+```
+
+### weightOf
+
+Returns the weight of a specific entry.
+
+```java
+OptionalInt weightOf(K key)
+```
+
+<ParamField path="key" type="K" required>
+  The key to query
+</ParamField>
+
+### weightedSize
+
+Returns the total weight of all entries.
+
+```java
+OptionalLong weightedSize()
+```
+
+### getMaximum / setMaximum
+
+Get or set the maximum size/weight.
+
+```java
+long getMaximum()
+void setMaximum(long maximum)
+```
+
+<ParamField path="maximum" type="long" required>
+  New maximum size or weight
+</ParamField>
+
+### coldest / hottest
+
+Retrieve entries by retention likelihood.
+
+```java
+Map<K, V> coldest(int limit)
+Map<K, V> hottest(int limit)
+```
+
+<ParamField path="limit" type="int" required>
+  Maximum number of entries to return
+</ParamField>
+
+**Example:**
+```java
+Eviction<String, User> eviction = policy.eviction().orElseThrow();
+
+// Get the 10 coldest entries (most likely to be evicted)
+Map<String, User> coldest = eviction.coldest(10);
+coldest.forEach((key, value) -> 
+    System.out.println(key + " is cold"));
+
+// Get the 10 hottest entries (least likely to be evicted)
+Map<String, User> hottest = eviction.hottest(10);
+
+// For weighted caches
+if (eviction.isWeighted()) {
+    Map<String, User> coldestByWeight = eviction.coldestWeighted(1000L);
+}
+```
+
+### Stream-based Traversal
+
+Process entries with functional operations.
+
+```java
+<T> T coldest(Function<Stream<CacheEntry<K, V>>, T> mappingFunction)
+<T> T hottest(Function<Stream<CacheEntry<K, V>>, T> mappingFunction)
+```
+
+**Example:**
+```java
+// Count entries over a certain weight
+long heavyCount = eviction.coldest(stream -> 
+    stream.filter(entry -> entry.weight() > 100).count());
+
+// Collect keys of hottest entries
+List<String> hottestKeys = eviction.hottest(stream ->
+    stream.map(CacheEntry::getKey)
+          .limit(20)
+          .collect(Collectors.toList()));
+```
+
+## Fixed Expiration Policy
+
+The `FixedExpiration<K, V>` interface provides operations for time-based expiration.
+
+### ageOf
+
+Returns the age of an entry since last reset.
+
+```java
+OptionalLong ageOf(K key, TimeUnit unit)
+Optional<Duration> ageOf(K key)
+```
+
+<ParamField path="key" type="K" required>
+  The key to query
+</ParamField>
+
+<ParamField path="unit" type="TimeUnit">
+  Time unit for the result
+</ParamField>
+
+**Example:**
+```java
+FixedExpiration<String, User> expiration = 
+    policy.expireAfterWrite().orElseThrow();
+
+Optional<Duration> age = expiration.ageOf("john");
+age.ifPresent(a -> {
+    if (a.toMinutes() > 5) {
+        System.out.println("Entry is getting stale");
+    }
+});
+```
+
+### getExpiresAfter / setExpiresAfter
+
+Get or set the expiration duration.
+
+```java
+long getExpiresAfter(TimeUnit unit)
+Duration getExpiresAfter()
+void setExpiresAfter(long duration, TimeUnit unit)
+void setExpiresAfter(Duration duration)
+```
+
+**Example:**
+```java
+// Get current expiration
+Duration current = expiration.getExpiresAfter();
+
+// Update dynamically
+expiration.setExpiresAfter(Duration.ofMinutes(30));
+```
+
+### oldest / youngest
+
+Retrieve entries by expiration order.
+
+```java
+Map<K, V> oldest(int limit)
+Map<K, V> youngest(int limit)
+<T> T oldest(Function<Stream<CacheEntry<K, V>>, T> mappingFunction)
+<T> T youngest(Function<Stream<CacheEntry<K, V>>, T> mappingFunction)
+```
+
+**Example:**
+```java
+// Get entries expiring soonest
+Map<String, User> expiringSoon = expiration.oldest(10);
+
+// Process with streams
+List<String> expiredKeys = expiration.oldest(stream ->
+    stream.filter(e -> e.expiresAfter().isNegative())
+          .map(CacheEntry::getKey)
+          .collect(Collectors.toList()));
+```
+
+## Variable Expiration Policy
+
+The `VarExpiration<K, V>` interface provides per-entry expiration control.
+
+### getExpiresAfter
+
+Get expiration time for a specific entry.
+
+```java
+OptionalLong getExpiresAfter(K key, TimeUnit unit)
+Optional<Duration> getExpiresAfter(K key)
+```
+
+### setExpiresAfter
+
+Set custom expiration for an entry.
+
+```java
+void setExpiresAfter(K key, long duration, TimeUnit unit)
+void setExpiresAfter(K key, Duration duration)
+```
+
+**Example:**
+```java
+VarExpiration<String, User> expiration = 
+    policy.expireVariably().orElseThrow();
+
+// Different TTLs for different users
+expiration.setExpiresAfter("premium", Duration.ofDays(7));
+expiration.setExpiresAfter("free", Duration.ofHours(1));
+```
+
+### put / putIfAbsent
+
+Insert entries with custom expiration.
+
+```java
+V put(K key, V value, long duration, TimeUnit unit)
+V put(K key, V value, Duration duration)
+V putIfAbsent(K key, V value, long duration, TimeUnit unit)
+V putIfAbsent(K key, V value, Duration duration)
+```
+
+<ParamField path="key" type="K" required>
+  The entry key
+</ParamField>
+
+<ParamField path="value" type="V" required>
+  The entry value
+</ParamField>
+
+<ParamField path="duration" type="Duration" required>
+  Custom expiration duration
+</ParamField>
+
+**Example:**
+```java
+// Add with 5-minute expiration
+expiration.put("session", sessionData, Duration.ofMinutes(5));
+
+// Add only if absent with custom TTL
+User existing = expiration.putIfAbsent(
+    "user", newUser, Duration.ofHours(2));
+```
+
+### compute
+
+Compute value with custom expiration.
+
+```java
+V compute(K key, 
+         BiFunction<? super K, ? super V, ? extends V> remappingFunction,
+         Duration duration)
+```
+
+**Example:**
+```java
+User updated = expiration.compute(
+    "john",
+    (k, v) -> v == null ? new User(k) : v.incrementLoginCount(),
+    Duration.ofMinutes(15)
+);
+```
+
+## Fixed Refresh Policy
+
+The `FixedRefresh<K, V>` interface controls automatic entry reloading.
+
+### getRefreshesAfter / setRefreshesAfter
+
+Get or set the refresh interval.
+
+```java
+long getRefreshesAfter(TimeUnit unit)
+Duration getRefreshesAfter()
+void setRefreshesAfter(long duration, TimeUnit unit)
+void setRefreshesAfter(Duration duration)
+```
+
+**Example:**
+```java
+FixedRefresh<String, User> refresh = 
+    policy.refreshAfterWrite().orElseThrow();
+
+// Check current interval
+Duration interval = refresh.getRefreshesAfter();
+
+// Adjust refresh rate
+refresh.setRefreshesAfter(Duration.ofMinutes(5));
+```
+
+### ageOf
+
+Get time since last refresh.
+
+```java
+OptionalLong ageOf(K key, TimeUnit unit)
+Optional<Duration> ageOf(K key)
+```
+
+**Example:**
+```java
+Optional<Duration> age = refresh.ageOf("config");
+age.ifPresent(a -> {
+    if (a.toMinutes() > 4) {
+        System.out.println("Entry will refresh soon");
+    }
+});
+```
+
+## Cache Entry
+
+The `CacheEntry<K, V>` interface represents an entry with metadata.
+
+### Methods
+
+<ResponseField name="getKey" type="K">
+  The entry's key
+</ResponseField>
+
+<ResponseField name="getValue" type="V">
+  The entry's value
+</ResponseField>
+
+<ResponseField name="weight" type="int">
+  Entry weight (1 if not weighted)
+</ResponseField>
+
+<ResponseField name="expiresAt" type="long">
+  Ticker reading when entry expires
+</ResponseField>
+
+<ResponseField name="expiresAfter" type="Duration">
+  Time until expiration
+</ResponseField>
+
+<ResponseField name="refreshableAt" type="long">
+  Ticker reading when entry becomes refreshable
+</ResponseField>
+
+<ResponseField name="refreshableAfter" type="Duration">
+  Time until refresh eligible
+</ResponseField>
+
+<ResponseField name="snapshotAt" type="long">
+  Ticker reading when snapshot was taken
+</ResponseField>
+
+**Example:**
+```java
+CacheEntry<String, User> entry = policy.getEntryIfPresentQuietly("john");
+if (entry != null) {
+    System.out.println("Key: " + entry.getKey());
+    System.out.println("Value: " + entry.getValue());
+    System.out.println("Weight: " + entry.weight());
+    System.out.println("Expires in: " + entry.expiresAfter());
+    System.out.println("Refreshable in: " + entry.refreshableAfter());
+}
+```
+
+## Complete Example
+
+Comprehensive policy usage:
+
+```java
+Cache<String, User> cache = Caffeine.newBuilder()
+    .maximumWeight(10_000)
+    .weigher((key, value) -> value.size())
+    .expireAfterWrite(Duration.ofMinutes(10))
+    .refreshAfterWrite(Duration.ofMinutes(5))
+    .recordStats()
+    .build(key -> loadUser(key));
+
+Policy<String, User> policy = cache.policy();
+
+// Check statistics
+if (policy.isRecordingStats()) {
+    CacheStats stats = cache.stats();
+    System.out.println("Hit rate: " + stats.hitRate());
+}
+
+// Inspect without side effects
+User user = policy.getIfPresentQuietly("john");
+
+// Manage eviction
+policy.eviction().ifPresent(eviction -> {
+    System.out.println("Current size: " + eviction.weightedSize().orElse(0));
+    System.out.println("Maximum: " + eviction.getMaximum());
+    
+    // Increase capacity during peak hours
+    if (isPeakHour()) {
+        eviction.setMaximum(20_000);
+    }
+    
+    // Examine cold entries
+    Map<String, User> cold = eviction.coldest(10);
+    cold.keySet().forEach(key -> 
+        System.out.println("Cold: " + key));
+});
+
+// Manage expiration
+policy.expireAfterWrite().ifPresent(expiration -> {
+    // Check entry age
+    expiration.ageOf("john").ifPresent(age -> {
+        if (age.toMinutes() > 8) {
+            System.out.println("Entry expiring soon");
+        }
+    });
+    
+    // Adjust expiration dynamically
+    expiration.setExpiresAfter(Duration.ofMinutes(15));
+    
+    // Get oldest entries
+    Map<String, User> oldest = expiration.oldest(5);
+});
+
+// Check refresh status
+policy.refreshAfterWrite().ifPresent(refresh -> {
+    Duration interval = refresh.getRefreshesAfter();
+    System.out.println("Refresh interval: " + interval);
+});
+
+// Monitor in-flight refreshes
+Map<String, CompletableFuture<User>> refreshes = policy.refreshes();
+System.out.println("Refreshing " + refreshes.size() + " entries");
+```
+
+## Best Practices
+
+1. **Use quiet operations for inspection** - When checking cache state without wanting to affect behavior, use `getIfPresentQuietly`
+
+2. **Dynamic adjustment** - Adjust cache parameters at runtime based on load:
+   ```java
+   if (highLoad()) {
+       policy.eviction().ifPresent(e -> e.setMaximum(e.getMaximum() * 2));
+   }
+   ```
+
+3. **Monitor cold entries** - Periodically check cold entries to understand eviction patterns:
+   ```java
+   eviction.coldest(10).forEach((k, v) -> 
+       logger.info("Cold entry: {}", k));
+   ```
+
+4. **Conditional operations** - Always check if a policy exists before using it:
+   ```java
+   policy.eviction().ifPresent(eviction -> {
+       // Safe to use eviction operations
+   });
+   ```
+
+5. **Stream processing** - Use stream-based methods for efficient batch operations:
+   ```java
+   long heavyEntries = eviction.coldest(stream ->
+       stream.filter(e -> e.weight() > 1000).count());
+   ```
+
+## See Also
+
+- [CacheStats](/api/cache-stats) - Statistics tracking
+- [Caffeine](/api/caffeine) - Cache builder
+- [Cache](/api/cache) - Main cache interface

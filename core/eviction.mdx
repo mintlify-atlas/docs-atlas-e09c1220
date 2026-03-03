@@ -1,0 +1,286 @@
+---
+title: Eviction
+description: Configure size-based and reference-based eviction policies to manage cache capacity
+---
+
+Caffeine automatically evicts entries to maintain size constraints and responds to memory pressure through reference-based eviction.
+
+## Size-based eviction
+
+Limit the cache by maximum number of entries or total weight.
+
+### Maximum size
+
+Evict entries when the cache exceeds a maximum number:
+
+```java
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+
+Cache<String, Document> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .build();
+```
+
+<Note>
+When `maximumSize` is 0, entries are evicted immediately after loading. This is useful for testing or temporarily disabling caching.
+</Note>
+
+Reference: Caffeine.java:425
+
+### Maximum weight
+
+Evict entries based on cumulative weight using a custom `Weigher`:
+
+```java
+import com.github.benmanes.caffeine.cache.Weigher;
+
+Cache<String, Document> cache = Caffeine.newBuilder()
+    .maximumWeight(100_000)
+    .weigher((key, document) -> document.sizeInBytes())
+    .build();
+```
+
+Reference: Caffeine.java:462, Caffeine.java:504
+
+<Warning>
+`maximumSize()` and `maximumWeight()` are mutually exclusive. You must use `weigher()` with `maximumWeight()`.
+</Warning>
+
+### Custom weigher
+
+Implement `Weigher` for complex weight calculations:
+
+```java
+Weigher<String, Document> weigher = new Weigher<>() {
+    @Override
+    public int weigh(String key, Document value) {
+        // Weight based on both key and value
+        return key.length() + value.sizeInBytes();
+    }
+};
+
+Cache<String, Document> cache = Caffeine.newBuilder()
+    .maximumWeight(100_000)
+    .weigher(weigher)
+    .build();
+```
+
+<Note>
+Weight must be non-negative. Weights are measured when entries are inserted or updated and remain static during the entry's lifetime.
+</Note>
+
+Reference: Weigher.java:45
+
+## Eviction policy
+
+Caffeine uses the **Window TinyLFU** eviction policy, which combines recency and frequency to maximize hit rate.
+
+### How it works
+
+<Tabs>
+  <Tab title="Window">
+    New entries enter a probationary space (the "window") where they are evaluated based on recent access patterns. This protects against cache pollution from one-hit-wonders.
+  </Tab>
+  
+  <Tab title="Main space">
+    Entries that prove their worth graduate to the main cache, protected by both recency and frequency signals. This ensures popular items remain cached.
+  </Tab>
+  
+  <Tab title="Frequency sketch">
+    A compact probabilistic data structure tracks access frequency for all entries, allowing efficient eviction decisions without maintaining full statistics.
+  </Tab>
+</Tabs>
+
+### Accessing eviction policy
+
+Inspect and control eviction behavior:
+
+```java
+import com.github.benmanes.caffeine.cache.Policy.Eviction;
+
+Cache<String, Document> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .build();
+
+cache.policy().eviction().ifPresent(eviction -> {
+    // Check if weighted
+    boolean weighted = eviction.isWeighted();
+    
+    // Get current maximum
+    long max = eviction.getMaximum();
+    
+    // Change maximum at runtime
+    eviction.setMaximum(20_000);
+    
+    // Get weight of specific entry
+    eviction.weightOf("key").ifPresent(weight -> 
+        System.out.println("Weight: " + weight)
+    );
+    
+    // Get total weight
+    eviction.weightedSize().ifPresent(size -> 
+        System.out.println("Total weight: " + size)
+    );
+});
+```
+
+Reference: Policy.java:158
+
+### Eviction order inspection
+
+View entries ordered by likelihood of eviction:
+
+```java
+import java.util.Map;
+
+cache.policy().eviction().ifPresent(eviction -> {
+    // Get coldest entries (most likely to be evicted)
+    Map<String, Document> coldest = eviction.coldest(100);
+    
+    // Get hottest entries (least likely to be evicted)
+    Map<String, Document> hottest = eviction.hottest(100);
+    
+    // For weighted caches
+    Map<String, Document> coldestWeighted = 
+        eviction.coldestWeighted(10_000);
+});
+```
+
+Reference: Policy.java:224, Policy.java:291
+
+<Warning>
+Obtaining ordered views is not a constant-time operation. It requires traversing entries within the eviction policy's exclusive lock.
+</Warning>
+
+## Reference-based eviction
+
+Automatically evict entries when keys or values are garbage collected.
+
+### Weak keys
+
+Keys wrapped in weak references are evicted when garbage collected:
+
+```java
+Cache<String, Document> cache = Caffeine.newBuilder()
+    .weakKeys()
+    .maximumSize(10_000)
+    .build();
+```
+
+<Note>
+With `weakKeys()`, the cache uses identity (`==`) comparison for keys instead of `equals()`, similar to `IdentityHashMap`.
+</Note>
+
+Reference: Caffeine.java:557
+
+### Weak values
+
+Values wrapped in weak references are evicted when garbage collected:
+
+```java
+Cache<String, Document> cache = Caffeine.newBuilder()
+    .weakValues()
+    .maximumSize(10_000)
+    .build();
+```
+
+<Warning>
+Weak values are garbage collected as soon as they become weakly reachable, making them poor candidates for caching. Consider `softValues()` instead.
+</Warning>
+
+Reference: Caffeine.java:587
+
+### Soft values
+
+Values wrapped in soft references are garbage collected in response to memory pressure:
+
+```java
+Cache<String, Document> cache = Caffeine.newBuilder()
+    .softValues()
+    .maximumSize(10_000)
+    .build();
+```
+
+Soft references are garbage collected using a globally LRU manner when the JVM needs memory.
+
+<Note>
+In most cases, it's better to use `maximumSize()` instead of soft references. Only use soft references if you understand their performance implications.
+</Note>
+
+Reference: Caffeine.java:624
+
+## Eviction timing
+
+Understand when eviction maintenance occurs:
+
+### Automatic maintenance
+
+Eviction is performed opportunistically:
+
+- During write operations (most common)
+- During read operations when writes are absent
+- Via calls to `cleanUp()`
+
+```java
+// Manually trigger maintenance
+cache.cleanUp();
+```
+
+Reference: Cache.java:221
+
+### Batch operations
+
+Eviction is batched for efficiency:
+
+<CodeGroup>
+```java Write operations
+// Eviction may occur during writes
+cache.put("key1", value1);
+cache.put("key2", value2);
+cache.putAll(Map.of("key3", value3, "key4", value4));
+```
+
+```java Read operations
+// Eviction may occur during reads when writes are infrequent
+value = cache.getIfPresent("key");
+value = cache.get("key", key -> loadValue(key));
+```
+</CodeGroup>
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Choose appropriate size bounds">
+    - Set `maximumSize` based on expected working set size
+    - Use `maximumWeight` when entries have significantly different sizes
+    - Monitor cache statistics to tune the maximum
+    - Remember that the cache may temporarily exceed the maximum during eviction
+  </Accordion>
+
+  <Accordion title="Implement efficient weighers">
+    - Return 0 weight for entries that should not count toward eviction
+    - Keep weight calculations fast (they run on every insert/update)
+    - Ensure weights are non-negative
+    - Consider both key and value sizes if memory is constrained
+  </Accordion>
+
+  <Accordion title="Reference-based eviction considerations">
+    - Prefer `maximumSize` over reference-based eviction when possible
+    - Use `weakKeys()` for canonicalization or interning use cases
+    - Use `softValues()` only if you need memory-sensitive caching
+    - Avoid `weakValues()` unless you have specific requirements
+  </Accordion>
+
+  <Accordion title="Runtime adjustments">
+    - Adjust `maximumSize` or `maximumWeight` at runtime via the policy API
+    - Call `cleanUp()` if you need prompt eviction after size changes
+    - Monitor `evictionCount` in statistics to understand churn
+  </Accordion>
+</AccordionGroup>
+
+## Related topics
+
+- [Expiration](/core/expiration) - Remove entries based on time
+- [Removal](/core/removal) - Handle eviction notifications
+- [Statistics](/core/statistics) - Monitor eviction metrics

@@ -1,0 +1,236 @@
+---
+title: Installation
+description: Add Caffeine to your Java project using Maven, Gradle, or manual JAR download
+---
+
+Caffeine is published to Maven Central and can be easily added to your project using your preferred build tool.
+
+## Requirements
+
+Caffeine has different version requirements based on your Java version:
+
+<Warning>
+**Java 11 or above**: Use Caffeine version `3.x`  
+**Java 8**: Use Caffeine version `2.x`
+</Warning>
+
+The current stable version is **3.2.3**.
+
+## Maven
+
+Add Caffeine to your `pom.xml`:
+
+<CodeGroup>
+```xml Core library
+<dependency>
+  <groupId>com.github.ben-manes.caffeine</groupId>
+  <artifactId>caffeine</artifactId>
+  <version>3.2.3</version>
+</dependency>
+```
+
+```xml With Guava adapter
+<!-- Core library -->
+<dependency>
+  <groupId>com.github.ben-manes.caffeine</groupId>
+  <artifactId>caffeine</artifactId>
+  <version>3.2.3</version>
+</dependency>
+
+<!-- Guava adapter for drop-in replacement -->
+<dependency>
+  <groupId>com.github.ben-manes.caffeine</groupId>
+  <artifactId>guava</artifactId>
+  <version>3.2.3</version>
+</dependency>
+```
+
+```xml With JCache support
+<!-- Core library -->
+<dependency>
+  <groupId>com.github.ben-manes.caffeine</groupId>
+  <artifactId>caffeine</artifactId>
+  <version>3.2.3</version>
+</dependency>
+
+<!-- JSR-107 JCache implementation -->
+<dependency>
+  <groupId>com.github.ben-manes.caffeine</groupId>
+  <artifactId>jcache</artifactId>
+  <version>3.2.3</version>
+</dependency>
+```
+</CodeGroup>
+
+## Gradle
+
+### Kotlin DSL
+
+Add Caffeine to your `build.gradle.kts`:
+
+<CodeGroup>
+```kotlin Core library
+dependencies {
+    implementation("com.github.ben-manes.caffeine:caffeine:3.2.3")
+}
+```
+
+```kotlin With extensions
+dependencies {
+    implementation("com.github.ben-manes.caffeine:caffeine:3.2.3")
+    
+    // Optional: Guava adapter
+    implementation("com.github.ben-manes.caffeine:guava:3.2.3")
+    
+    // Optional: JCache support
+    implementation("com.github.ben-manes.caffeine:jcache:3.2.3")
+}
+```
+</CodeGroup>
+
+### Groovy DSL
+
+Add Caffeine to your `build.gradle`:
+
+<CodeGroup>
+```groovy Core library
+dependencies {
+    implementation 'com.github.ben-manes.caffeine:caffeine:3.2.3'
+}
+```
+
+```groovy With extensions
+dependencies {
+    implementation 'com.github.ben-manes.caffeine:caffeine:3.2.3'
+    
+    // Optional: Guava adapter
+    implementation 'com.github.ben-manes.caffeine:guava:3.2.3'
+    
+    // Optional: JCache support
+    implementation 'com.github.ben-manes.caffeine:jcache:3.2.3'
+}
+```
+</CodeGroup>
+
+## Manual download
+
+You can manually download JARs from Maven Central:
+
+1. Visit [Maven Central](https://central.sonatype.com/artifact/com.github.ben-manes.caffeine/caffeine)
+2. Select version 3.2.3 (or latest)
+3. Download the JAR file
+4. Add to your project's classpath
+
+## Snapshot builds
+
+<Tip>
+Want to try the latest development features? Snapshot builds are available from Sonatype's snapshot repository.
+</Tip>
+
+To use snapshot builds, add the Sonatype snapshot repository:
+
+<CodeGroup>
+```xml Maven
+<repositories>
+  <repository>
+    <id>sonatype-snapshots</id>
+    <url>https://oss.sonatype.org/content/repositories/snapshots</url>
+    <snapshots>
+      <enabled>true</enabled>
+    </snapshots>
+  </repository>
+</repositories>
+
+<dependencies>
+  <dependency>
+    <groupId>com.github.ben-manes.caffeine</groupId>
+    <artifactId>caffeine</artifactId>
+    <version>3.2.4-SNAPSHOT</version>
+  </dependency>
+</dependencies>
+```
+
+```kotlin Gradle Kotlin DSL
+repositories {
+    maven {
+        url = uri("https://oss.sonatype.org/content/repositories/snapshots")
+    }
+}
+
+dependencies {
+    implementation("com.github.ben-manes.caffeine:caffeine:3.2.4-SNAPSHOT")
+}
+```
+
+```groovy Gradle Groovy DSL
+repositories {
+    maven {
+        url 'https://oss.sonatype.org/content/repositories/snapshots'
+    }
+}
+
+dependencies {
+    implementation 'com.github.ben-manes.caffeine:caffeine:3.2.4-SNAPSHOT'
+}
+```
+</CodeGroup>
+
+## Optional extensions
+
+Caffeine offers optional extensions for additional functionality:
+
+### Guava adapter
+
+Provides adapters to use Caffeine as a drop-in replacement for Guava's cache:
+
+```xml
+<dependency>
+  <groupId>com.github.ben-manes.caffeine</groupId>
+  <artifactId>guava</artifactId>
+  <version>3.2.3</version>
+</dependency>
+```
+
+This allows you to migrate from Guava's cache to Caffeine with minimal code changes.
+
+### JCache (JSR-107)
+
+Provides JSR-107 JCache API compatibility:
+
+```xml
+<dependency>
+  <groupId>com.github.ben-manes.caffeine</groupId>
+  <artifactId>jcache</artifactId>
+  <version>3.2.3</version>
+</dependency>
+```
+
+Use this if your application requires the standard Java Caching API.
+
+## Verify installation
+
+Verify Caffeine is correctly installed by creating a simple cache:
+
+```java
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+
+public class VerifyInstallation {
+    public static void main(String[] args) {
+        Cache<String, String> cache = Caffeine.newBuilder()
+            .maximumSize(100)
+            .build();
+        
+        cache.put("hello", "world");
+        System.out.println(cache.getIfPresent("hello")); // Prints: world
+    }
+}
+```
+
+If this compiles and runs without errors, Caffeine is successfully installed.
+
+## Next steps
+
+<Card title="Quick start guide" icon="rocket" href="/quickstart">
+  Build your first cache with step-by-step examples
+</Card>

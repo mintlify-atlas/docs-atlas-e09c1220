@@ -1,0 +1,435 @@
+---
+title: Cache Types
+description: Understanding different cache types and when to use each one
+---
+
+Caffeine provides four main cache types, each designed for specific use cases. Understanding their differences is crucial for choosing the right cache for your application.
+
+## Overview
+
+Caffeine offers four cache interfaces:
+
+<CardGroup cols={2}>
+  <Card title="Cache" icon="box">
+    Manual cache with explicit entry management
+  </Card>
+  <Card title="LoadingCache" icon="rotate">
+    Automatically loads entries on cache miss
+  </Card>
+  <Card title="AsyncCache" icon="bolt">
+    Asynchronous operations with CompletableFuture
+  </Card>
+  <Card title="AsyncLoadingCache" icon="rotate">
+    Combines async operations with automatic loading
+  </Card>
+</CardGroup>
+
+## Cache: Manual Entry Management
+
+The basic `Cache` interface provides manual control over cache entries. You explicitly manage what goes in and what comes out.
+
+### When to Use
+
+- You have full control over data loading logic
+- Loading logic varies by call site
+- You need fine-grained error handling
+- Simple caching without automatic loading
+
+### Basic Usage
+
+```java
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+
+Cache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .build();
+
+// Manual get with null check
+User user = cache.getIfPresent(userId);
+if (user == null) {
+    user = database.loadUser(userId);
+    cache.put(userId, user);
+}
+```
+
+### Compute Pattern
+
+Use `get(key, mappingFunction)` for atomic compute-if-absent operations:
+
+```java
+// Atomic compute-if-absent
+User user = cache.get(userId, key -> {
+    // This function is called only if the key is not present
+    return database.loadUser(key);
+});
+
+// Bulk operations
+Map<String, User> users = cache.getAll(
+    userIds,
+    keys -> database.loadUsers(keys) // Returns Map<String, User>
+);
+```
+
+<Warning>
+The mapping function must NOT attempt to update other cache entries. This will cause a deadlock or IllegalStateException.
+</Warning>
+
+### Direct Manipulation
+
+```java
+// Put entries
+cache.put("user1", user1);
+cache.putAll(Map.of(
+    "user2", user2,
+    "user3", user3
+));
+
+// Remove entries
+cache.invalidate("user1");
+cache.invalidateAll(List.of("user2", "user3"));
+cache.invalidateAll(); // Clear all
+
+// Check size
+long size = cache.estimatedSize();
+```
+
+## LoadingCache: Automatic Loading
+
+`LoadingCache` extends `Cache` with automatic entry loading. When you request a key that doesn't exist, the cache automatically loads it using the configured `CacheLoader`.
+
+### When to Use
+
+- Consistent loading logic across all cache accesses
+- Want to simplify calling code
+- Need automatic cache population
+- Bulk loading optimization is beneficial
+
+### Basic Setup
+
+```java
+import com.github.benmanes.caffeine.cache.LoadingCache;
+import com.github.benmanes.caffeine.cache.CacheLoader;
+
+LoadingCache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .expireAfterWrite(Duration.ofMinutes(10))
+    .build(key -> database.loadUser(key));
+
+// Automatically loads if not present
+User user = cache.get(userId);
+```
+
+### Bulk Loading
+
+Implement `loadAll` for efficient batch loading:
+
+```java
+LoadingCache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .build(new CacheLoader<String, User>() {
+        @Override
+        public User load(String key) {
+            return database.loadUser(key);
+        }
+        
+        @Override
+        public Map<String, User> loadAll(Set<? extends String> keys) {
+            // Single database query for all keys
+            return database.loadUsers(keys);
+        }
+    });
+
+// Efficient bulk load
+Map<String, User> users = cache.getAll(userIds);
+```
+
+<Tip>
+Implementing `loadAll` can significantly improve performance when loading multiple entries, as it allows batching database queries.
+</Tip>
+
+### Refresh Operations
+
+```java
+import java.util.concurrent.CompletableFuture;
+
+LoadingCache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .refreshAfterWrite(Duration.ofMinutes(5))
+    .build(key -> database.loadUser(key));
+
+// Manual refresh
+CompletableFuture<User> future = cache.refresh(userId);
+
+// Bulk refresh
+CompletableFuture<Map<String, User>> futures = cache.refreshAll(userIds);
+```
+
+## AsyncCache: Asynchronous Operations
+
+`AsyncCache` returns `CompletableFuture` values, enabling fully asynchronous cache operations. Perfect for non-blocking applications.
+
+### When to Use
+
+- Building reactive or async applications
+- Need to avoid blocking threads
+- Want to compose async operations
+- Loading operations are naturally asynchronous
+
+### Basic Usage
+
+```java
+import com.github.benmanes.caffeine.cache.AsyncCache;
+
+AsyncCache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .buildAsync();
+
+// Returns CompletableFuture
+CompletableFuture<User> userFuture = cache.get(userId, key -> 
+    database.loadUserAsync(key) // Returns User
+);
+
+userFuture.thenAccept(user -> {
+    System.out.println("User loaded: " + user.getName());
+});
+```
+
+### Working with CompletableFuture
+
+```java
+// Provide CompletableFuture directly
+AsyncCache<String, User> cache = Caffeine.newBuilder()
+    .buildAsync();
+
+CompletableFuture<User> userFuture = cache.get(userId, 
+    (key, executor) -> database.loadUserAsync(key)
+);
+
+// Manual put with future
+CompletableFuture<User> future = CompletableFuture
+    .supplyAsync(() -> database.loadUser(userId));
+cache.put(userId, future);
+
+// Check if present (non-blocking)
+CompletableFuture<User> maybeUser = cache.getIfPresent(userId);
+if (maybeUser != null) {
+    maybeUser.thenAccept(user -> handleUser(user));
+}
+```
+
+### Synchronous View
+
+Access the underlying synchronous cache when needed:
+
+```java
+AsyncCache<String, User> asyncCache = Caffeine.newBuilder()
+    .buildAsync();
+
+// Get synchronous view
+Cache<String, User> syncCache = asyncCache.synchronous();
+
+// Now use synchronously (blocks on futures)
+User user = syncCache.getIfPresent(userId);
+```
+
+<Note>
+The synchronous view blocks on CompletableFuture completion. Use sparingly in async applications.
+</Note>
+
+## AsyncLoadingCache: Async with Auto-Loading
+
+`AsyncLoadingCache` combines automatic loading with asynchronous operations. The most powerful option for async applications.
+
+### When to Use
+
+- Async application with consistent loading logic
+- Need automatic async cache population
+- Want to optimize with bulk async loading
+- Building reactive microservices
+
+### Basic Setup
+
+```java
+import com.github.benmanes.caffeine.cache.AsyncLoadingCache;
+import com.github.benmanes.caffeine.cache.AsyncCacheLoader;
+
+AsyncLoadingCache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .buildAsync(key -> database.loadUserAsync(key));
+
+// Automatically loads asynchronously
+CompletableFuture<User> userFuture = cache.get(userId);
+```
+
+### Async Bulk Loading
+
+```java
+AsyncLoadingCache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .buildAsync(new AsyncCacheLoader<String, User>() {
+        @Override
+        public CompletableFuture<User> asyncLoad(String key, Executor executor) {
+            return database.loadUserAsync(key);
+        }
+        
+        @Override
+        public CompletableFuture<Map<String, User>> asyncLoadAll(
+                Set<? extends String> keys, 
+                Executor executor) {
+            // Single async database query for all keys
+            return database.loadUsersAsync(keys);
+        }
+    });
+
+// Efficient async bulk load
+CompletableFuture<Map<String, User>> usersFuture = cache.getAll(userIds);
+```
+
+### Async Refresh
+
+Implement `asyncReload` for efficient cache refresh:
+
+```java
+AsyncCacheLoader<String, User> loader = new AsyncCacheLoader<String, User>() {
+    @Override
+    public CompletableFuture<User> asyncLoad(String key, Executor executor) {
+        return database.loadUserAsync(key);
+    }
+    
+    @Override
+    public CompletableFuture<User> asyncReload(
+            String key, 
+            User oldValue, 
+            Executor executor) {
+        // Use old value for conditional loading
+        return database.loadUserIfModifiedAsync(key, oldValue.getVersion())
+            .thenApply(newUser -> newUser != null ? newUser : oldValue);
+    }
+};
+
+AsyncLoadingCache<String, User> cache = Caffeine.newBuilder()
+    .refreshAfterWrite(Duration.ofMinutes(5))
+    .buildAsync(loader);
+```
+
+## Comparison Matrix
+
+<Tabs>
+  <Tab title="Features">
+    | Feature | Cache | LoadingCache | AsyncCache | AsyncLoadingCache |
+    |---------|-------|--------------|------------|-------------------|
+    | Manual loading | Yes | Yes | Yes | Yes |
+    | Automatic loading | No | Yes | No | Yes |
+    | Synchronous | Yes | Yes | No | No |
+    | Asynchronous | No | No | Yes | Yes |
+    | Bulk operations | Yes | Yes | Yes | Yes |
+    | Refresh support | No | Yes | No | Yes |
+  </Tab>
+  <Tab title="Use Cases">
+    | Cache Type | Best For |
+    |------------|----------|
+    | **Cache** | Simple caching, varying load logic, full control |
+    | **LoadingCache** | Consistent sync loading, automatic population |
+    | **AsyncCache** | Non-blocking apps, manual async loading |
+    | **AsyncLoadingCache** | Reactive systems, automatic async loading |
+  </Tab>
+  <Tab title="Performance">
+    | Aspect | Cache | LoadingCache | AsyncCache | AsyncLoadingCache |
+    |--------|-------|--------------|------------|-------------------|
+    | Thread blocking | Depends | Yes | No | No |
+    | Bulk optimization | Manual | Yes | Manual | Yes |
+    | Concurrency | High | High | Very High | Very High |
+    | Complexity | Low | Medium | Medium | High |
+  </Tab>
+</Tabs>
+
+## Choosing the Right Type
+
+<Steps>
+  <Step title="Determine Loading Pattern">
+    Does your loading logic vary by call site or remain consistent?
+    - **Varies**: Use `Cache` or `AsyncCache`
+    - **Consistent**: Use `LoadingCache` or `AsyncLoadingCache`
+  </Step>
+  <Step title="Consider Threading Model">
+    Is your application synchronous or asynchronous?
+    - **Synchronous**: Use `Cache` or `LoadingCache`
+    - **Asynchronous**: Use `AsyncCache` or `AsyncLoadingCache`
+  </Step>
+  <Step title="Evaluate Requirements">
+    - Need bulk loading optimization? Consider `LoadingCache` or `AsyncLoadingCache`
+    - Need refresh support? Must use `LoadingCache` or `AsyncLoadingCache`
+    - Building microservices? Consider `AsyncLoadingCache`
+  </Step>
+</Steps>
+
+## Common Patterns
+
+### Converting Between Types
+
+```java
+// AsyncCache to synchronous Cache
+AsyncCache<String, User> asyncCache = Caffeine.newBuilder().buildAsync();
+Cache<String, User> syncCache = asyncCache.synchronous();
+
+// AsyncLoadingCache to synchronous LoadingCache
+AsyncLoadingCache<String, User> asyncLoadingCache = 
+    Caffeine.newBuilder().buildAsync(key -> loadUserAsync(key));
+LoadingCache<String, User> syncLoadingCache = asyncLoadingCache.synchronous();
+```
+
+### Delegating Between Types
+
+```java
+// Use LoadingCache internally, expose as Cache
+public class UserCache {
+    private final LoadingCache<String, User> cache;
+    
+    public UserCache() {
+        this.cache = Caffeine.newBuilder()
+            .build(key -> database.loadUser(key));
+    }
+    
+    // Expose as Cache interface for flexibility
+    public Cache<String, User> asCache() {
+        return cache;
+    }
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Start Simple">
+    Begin with `Cache` or `LoadingCache`. Migrate to async types only when you have a clear need for non-blocking operations.
+  </Accordion>
+  <Accordion title="Leverage Bulk Operations">
+    When using `LoadingCache` or `AsyncLoadingCache`, always implement bulk loading methods for better performance.
+  </Accordion>
+  <Accordion title="Error Handling">
+    - With `Cache`: Handle errors at call site
+    - With `LoadingCache`: Exceptions wrapped in `CompletionException`
+    - With async caches: Use CompletableFuture error handling
+  </Accordion>
+  <Accordion title="Type Safety">
+    Choose the most specific cache type for your needs. Don't use `AsyncCache` if you don't need async operations.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Async Caching" icon="bolt" href="/guides/async-caching">
+    Deep dive into asynchronous caching patterns
+  </Card>
+  <Card title="Computing Values" icon="calculator" href="/guides/computing">
+    Learn about compute operations and atomic updates
+  </Card>
+  <Card title="Performance Tuning" icon="gauge" href="/guides/performance">
+    Optimize your cache configuration
+  </Card>
+  <Card title="Testing Caches" icon="flask" href="/guides/testing">
+    Best practices for testing cache implementations
+  </Card>
+</CardGroup>

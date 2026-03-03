@@ -1,0 +1,311 @@
+---
+title: Weigher
+description: Interface for calculating the weight of cache entries for size-based eviction
+---
+
+## Overview
+
+`Weigher` calculates the weights of cache entries to determine when eviction is required based on a total weight threshold. This allows for size-based eviction policies where entries have different sizes or costs.
+
+Entry weights are relative to each other and have no specific unit. The total weight of all entries is compared against the maximum weight configured via `maximumWeight()`.
+
+## Type Parameters
+
+<ParamField path="K" type="type parameter">
+  The type of keys
+</ParamField>
+
+<ParamField path="V" type="type parameter">
+  The type of values
+</ParamField>
+
+## Methods
+
+### weigh
+
+```java
+int weigh(K key, V value)
+```
+
+Returns the weight of a cache entry. Weights are relative to each other rather than having absolute units.
+
+<ParamField path="key" type="K" required>
+  The key to weigh
+</ParamField>
+
+<ParamField path="value" type="V" required>
+  The value to weigh
+</ParamField>
+
+<ResponseField name="return" type="int">
+  The weight of the entry. Must be non-negative.
+</ResponseField>
+
+<Warning>
+  The weight must be non-negative. Negative weights will cause an IllegalArgumentException.
+</Warning>
+
+### singletonWeigher (Static Factory)
+
+```java
+static <K, V> Weigher<K, V> singletonWeigher()
+```
+
+Returns a weigher where every entry has a weight of 1. This is the default weigher when using `maximumSize()` instead of `maximumWeight()`.
+
+<ResponseField name="return" type="Weigher<K, V>">
+  A weigher where each entry has a weight of 1
+</ResponseField>
+
+### boundedWeigher (Static Factory)
+
+```java
+static <K, V> Weigher<K, V> boundedWeigher(Weigher<K, V> delegate)
+```
+
+Returns a weigher that enforces that the weight returned by the delegate is non-negative.
+
+<ParamField path="delegate" type="Weigher<K, V>" required>
+  The weigher that calculates the entry weight
+</ParamField>
+
+<ResponseField name="return" type="Weigher<K, V>">
+  A weigher that validates the delegate's weights are non-negative
+</ResponseField>
+
+## Configuration
+
+Configure a `Weigher` using the Caffeine builder with `maximumWeight()`:
+
+```java
+Cache<Key, Document> cache = Caffeine.newBuilder()
+    .maximumWeight(10_000_000) // 10 MB
+    .weigher((Key key, Document doc) -> doc.getSizeInBytes())
+    .build();
+```
+
+<Info>
+  You must use `maximumWeight()` instead of `maximumSize()` when providing a custom weigher.
+</Info>
+
+## Implementation Examples
+
+### Weighing by Object Size
+
+```java
+Weigher<String, byte[]> weigher = (key, value) -> value.length;
+
+Cache<String, byte[]> cache = Caffeine.newBuilder()
+    .maximumWeight(10_000_000) // 10 MB in bytes
+    .weigher(weigher)
+    .build();
+```
+
+### Weighing by String Length
+
+```java
+Weigher<String, String> weigher = (key, value) -> {
+    // Weight based on approximate memory usage
+    int keyWeight = key.length() * 2; // chars are 2 bytes
+    int valueWeight = value.length() * 2;
+    return keyWeight + valueWeight;
+};
+
+Cache<String, String> cache = Caffeine.newBuilder()
+    .maximumWeight(1_000_000) // ~500K chars
+    .weigher(weigher)
+    .build();
+```
+
+### Weighing by Collection Size
+
+```java
+Weigher<String, List<Item>> weigher = (key, value) -> {
+    // Base overhead + size of list
+    int baseWeight = 100; // Estimated object overhead
+    int itemsWeight = value.size() * 50; // Estimated per-item weight
+    return baseWeight + itemsWeight;
+};
+
+Cache<String, List<Item>> cache = Caffeine.newBuilder()
+    .maximumWeight(100_000)
+    .weigher(weigher)
+    .build();
+```
+
+### Weighing by Custom Cost
+
+```java
+public class Document {
+    private final int computationCost;
+    private final byte[] data;
+    
+    public int getCost() {
+        // Weight represents computation cost to regenerate
+        return computationCost;
+    }
+}
+
+Weigher<String, Document> weigher = (key, doc) -> doc.getCost();
+
+Cache<String, Document> cache = Caffeine.newBuilder()
+    .maximumWeight(10_000) // Total cost units
+    .weigher(weigher)
+    .build();
+```
+
+### Weighing with Both Key and Value
+
+```java
+Weigher<byte[], ImageData> weigher = (key, value) -> {
+    int keyWeight = key.length;
+    int valueWeight = value.getWidth() * value.getHeight() * 4; // RGBA
+    return keyWeight + valueWeight;
+};
+
+Cache<byte[], ImageData> cache = Caffeine.newBuilder()
+    .maximumWeight(100_000_000) // ~100 MB
+    .weigher(weigher)
+    .build();
+```
+
+### Clamping Weight Values
+
+```java
+Weigher<String, Data> weigher = (key, value) -> {
+    int weight = value.calculateSize();
+    // Ensure minimum and maximum bounds
+    return Math.max(1, Math.min(weight, 1_000_000));
+};
+
+Cache<String, Data> cache = Caffeine.newBuilder()
+    .maximumWeight(50_000_000)
+    .weigher(weigher)
+    .build();
+```
+
+## Best Practices
+
+### Do's
+
+- Keep weighing logic fast and lightweight
+- Use consistent units across all entries
+- Consider both key and value sizes when appropriate
+- Return at least 1 for non-empty entries
+- Use static or pre-calculated weights when possible
+- Account for object overhead in weight calculations
+
+### Don'ts
+
+- Never return negative weights
+- Don't perform expensive computations in the weigher
+- Avoid I/O operations or external calls
+- Don't throw exceptions from the weigher
+- Avoid weights that vary based on external state
+- Don't use zero or negative values
+
+## Weight Calculation Guidelines
+
+### Memory-Based Weights
+
+For memory-based eviction, consider:
+
+```java
+Weigher<String, Object> memoryWeigher = (key, value) -> {
+    int keyWeight = estimateStringMemory(key);
+    int valueWeight = estimateObjectMemory(value);
+    int overhead = 32; // Estimated entry overhead
+    return keyWeight + valueWeight + overhead;
+};
+
+private int estimateStringMemory(String s) {
+    // 40 bytes object overhead + 2 bytes per char
+    return 40 + (s.length() * 2);
+}
+```
+
+### Cost-Based Weights
+
+For computational cost-based eviction:
+
+```java
+Weigher<Query, Result> costWeigher = (query, result) -> {
+    // Weight based on time to compute
+    return result.getComputationTimeMs();
+};
+```
+
+### Balanced Approach
+
+Combine multiple factors:
+
+```java
+Weigher<String, CachedData> balancedWeigher = (key, data) -> {
+    int sizeWeight = data.getSizeInBytes() / 1024; // KB
+    int costWeight = data.getComputationCost() * 10;
+    int popularityWeight = data.getAccessCount() > 100 ? -50 : 0;
+    return Math.max(1, sizeWeight + costWeight + popularityWeight);
+};
+```
+
+## Common Patterns
+
+### Document Cache
+
+```java
+Cache<String, Document> cache = Caffeine.newBuilder()
+    .maximumWeight(100_000_000) // 100 MB
+    .weigher((String id, Document doc) -> doc.getContent().length())
+    .recordStats()
+    .build();
+```
+
+### Image Cache
+
+```java
+Cache<String, BufferedImage> cache = Caffeine.newBuilder()
+    .maximumWeight(500_000_000) // ~500 MB
+    .weigher((String id, BufferedImage img) -> {
+        // 4 bytes per pixel (ARGB)
+        return img.getWidth() * img.getHeight() * 4;
+    })
+    .build();
+```
+
+### Multi-Tier Weighting
+
+```java
+enum Priority { LOW(1), MEDIUM(10), HIGH(100) }
+
+Weigher<String, CachedItem> weigher = (key, item) -> {
+    int baseWeight = item.getSizeInBytes();
+    // Divide by priority - high priority items weigh less (kept longer)
+    return baseWeight / item.getPriority().weight;
+};
+```
+
+## When to Use
+
+Use a custom `Weigher` when:
+
+- Entries have significantly different sizes
+- You want to limit cache by memory usage, not entry count
+- Entries have varying computational costs
+- You need fine-grained control over eviction
+- You want to account for the actual resource consumption
+
+Use the default singleton weigher (`maximumSize()`) when:
+
+- All entries are approximately the same size
+- Simple entry count limiting is sufficient
+- You want maximum performance (no weight calculation overhead)
+
+## Related Interfaces
+
+- [Caffeine Builder](/api/caffeine) - Configuration with `maximumWeight()`
+- [Eviction](/core/eviction) - Eviction policies guide
+- [RemovalListener](/api/removal-listener) - Listen to evictions
+
+## See Also
+
+- [Statistics](/core/statistics) - Monitor eviction rates

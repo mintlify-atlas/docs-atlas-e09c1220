@@ -1,0 +1,384 @@
+---
+title: AsyncLoadingCache
+description: A cache that automatically loads values asynchronously using an AsyncCacheLoader
+---
+
+The `AsyncLoadingCache` interface extends [AsyncCache](/api/async-cache) to provide automatic asynchronous value loading. Values are automatically loaded by the cache using the provided `AsyncCacheLoader`, and stored as `CompletableFuture` instances until evicted or manually invalidated.
+
+## Overview
+
+`AsyncLoadingCache` combines the benefits of automatic loading with asynchronous computation, enabling:
+- Automatic asynchronous value loading
+- Non-blocking cache operations
+- Simplified async access patterns
+- Efficient bulk loading
+
+```java
+AsyncLoadingCache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .expireAfterWrite(Duration.ofMinutes(10))
+    .buildAsync(userId -> database.getUserByIdAsync(userId));
+
+// Simple async access - automatically loads if not cached
+CompletableFuture<User> userFuture = cache.get("user123");
+```
+
+## Automatic Loading Methods
+
+<ParamField path="get(K key)" type="CompletableFuture<V>">
+  Returns the future associated with the key, obtaining that value from `AsyncCacheLoader.asyncLoad()` if necessary. If the asynchronous computation fails, the entry will be automatically removed.
+  
+  <Expandable title="parameters">
+    <ResponseField name="key" type="K" required>
+      The key with which the value is to be associated
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="returns">
+    <ResponseField name="future" type="CompletableFuture<V>">
+      The current (existing or computed) future value associated with the key
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `NullPointerException` - if the key is null or if the future returned by the loader is null
+    - `RuntimeException` or `Error` - if the loader throws when constructing the future
+  </Expandable>
+  
+  ```java
+  AsyncLoadingCache<String, User> cache = Caffeine.newBuilder()
+      .maximumSize(10_000)
+      .buildAsync((userId, executor) -> {
+          return CompletableFuture.supplyAsync(() -> {
+              System.out.println("Loading user: " + userId);
+              return database.getUserById(userId);
+          }, executor);
+      });
+  
+  // First access - loads asynchronously
+  CompletableFuture<User> future1 = cache.get("user123");
+  future1.thenAccept(user -> System.out.println("User: " + user.getName()));
+  
+  // Second access - returns cached future
+  CompletableFuture<User> future2 = cache.get("user123");
+  ```
+</ParamField>
+
+<ParamField path="getAll(Iterable<K> keys)" type="CompletableFuture<Map<K, V>>">
+  Returns a future of a map containing the values associated with the keys, creating or retrieving those values if necessary. Combines already cached entries with newly loaded entries.
+  
+  <Expandable title="parameters">
+    <ResponseField name="keys" type="Iterable<K>" required>
+      The keys whose associated values are to be returned
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="returns">
+    <ResponseField name="future" type="CompletableFuture<Map<K, V>>">
+      A future containing an unmodifiable mapping of keys to values
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `NullPointerException` - if the collection is null, contains null, or the loader returns null
+    - `RuntimeException` or `Error` - if the loader throws or returns null from asyncLoadAll
+  </Expandable>
+  
+  ```java
+  AsyncLoadingCache<String, Product> cache = Caffeine.newBuilder()
+      .maximumSize(10_000)
+      .buildAsync(new AsyncCacheLoader<String, Product>() {
+          @Override
+          public CompletableFuture<Product> asyncLoad(String key, Executor executor) {
+              return CompletableFuture.supplyAsync(
+                  () -> productApi.getProduct(key), executor);
+          }
+          
+          @Override
+          public CompletableFuture<Map<String, Product>> asyncLoadAll(
+                  Set<String> keys, Executor executor) {
+              // Optimized bulk load
+              return CompletableFuture.supplyAsync(
+                  () -> productApi.getProductsBatch(keys), executor);
+          }
+      });
+  
+  List<String> productIds = Arrays.asList("p1", "p2", "p3");
+  
+  CompletableFuture<Map<String, Product>> productsFuture = cache.getAll(productIds);
+  productsFuture.thenAccept(products -> {
+      System.out.println("Loaded " + products.size() + " products");
+  });
+  ```
+</ParamField>
+
+## Synchronous View
+
+<ParamField path="synchronous()" type="LoadingCache<K, V>">
+  Returns a view of the entries stored in this cache as a synchronous `LoadingCache`. A mapping is not present if the value is currently being loaded. Modifications to the synchronous cache directly affect the asynchronous cache. If a modification is made to a mapping that is currently loading, the operation blocks until the computation completes.
+  
+  <Expandable title="returns">
+    <ResponseField name="cache" type="LoadingCache<K, V>">
+      A thread-safe synchronous view of this cache
+    </ResponseField>
+  </Expandable>
+  
+  ```java
+  AsyncLoadingCache<String, Config> asyncCache = Caffeine.newBuilder()
+      .maximumSize(100)
+      .buildAsync(key -> loadConfigAsync(key));
+  
+  // Get synchronous view
+  LoadingCache<String, Config> syncCache = asyncCache.synchronous();
+  
+  // Blocking operations
+  Config config = syncCache.get("app.config"); // Blocks until loaded
+  syncCache.put("custom.config", customConfig);
+  ```
+</ParamField>
+
+## Inherited Methods
+
+`AsyncLoadingCache` inherits all methods from [AsyncCache](/api/async-cache), including:
+
+- `getIfPresent(K key)` - Get without loading
+- `get(K key, Function<K, V> mappingFunction)` - Get with custom sync loader
+- `get(K key, BiFunction<K, Executor, CompletableFuture<V>> mappingFunction)` - Get with custom async loader
+- `getAll(Iterable<K> keys, Function<Set<K>, Map<K, V>> mappingFunction)` - Bulk get with sync loader
+- `getAll(Iterable<K> keys, BiFunction<Set<K>, Executor, CompletableFuture<Map<K, V>>> mappingFunction)` - Bulk get with async loader
+- `put(K key, CompletableFuture<V> valueFuture)` - Manual insertion
+- `asMap()` - Get Map view of futures
+
+Additionally, through the synchronous view, you can access all [Cache](/api/cache) methods:
+- `invalidate(K key)` - Remove single entry
+- `invalidateAll(Iterable<K> keys)` - Remove multiple entries
+- `invalidateAll()` - Clear cache
+- `estimatedSize()` - Get approximate size
+- `stats()` - Get statistics
+- `cleanUp()` - Perform maintenance
+- `policy()` - Access policy controls
+
+## Usage Examples
+
+### Basic Async Loading Cache
+
+```java
+AsyncLoadingCache<String, User> userCache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .expireAfterWrite(Duration.ofMinutes(10))
+    .buildAsync((userId, executor) -> {
+        return CompletableFuture.supplyAsync(() -> {
+            return userService.getUserById(userId);
+        }, executor);
+    });
+
+// Simple async access
+CompletableFuture<User> userFuture = userCache.get("user123");
+userFuture.thenAccept(user -> {
+    System.out.println("User: " + user.getName());
+});
+
+// Chaining operations
+userCache.get("user456")
+    .thenApply(user -> user.getEmail())
+    .thenAccept(email -> sendEmail(email));
+```
+
+### With CacheLoader (Synchronous Loader)
+
+```java
+// Using synchronous CacheLoader - automatically wrapped as async
+AsyncLoadingCache<String, Document> docCache = Caffeine.newBuilder()
+    .maximumSize(1000)
+    .expireAfterWrite(Duration.ofMinutes(30))
+    .buildAsync(docId -> {
+        // Synchronous load - will be executed asynchronously
+        return documentService.loadDocument(docId);
+    });
+
+CompletableFuture<Document> docFuture = docCache.get("doc123");
+```
+
+### With AsyncCacheLoader (Full Async Control)
+
+```java
+AsyncLoadingCache<String, Image> imageCache = Caffeine.newBuilder()
+    .maximumSize(500)
+    .expireAfterAccess(Duration.ofMinutes(15))
+    .buildAsync(new AsyncCacheLoader<String, Image>() {
+        @Override
+        public CompletableFuture<Image> asyncLoad(String imageId, Executor executor) {
+            // Full control over async computation
+            return imageService.loadImageAsync(imageId)
+                .thenApplyAsync(rawImage -> processImage(rawImage), executor);
+        }
+        
+        @Override
+        public CompletableFuture<Image> asyncReload(
+                String imageId, Image oldImage, Executor executor) {
+            // Custom reload logic
+            return imageService.checkForUpdates(imageId)
+                .thenCompose(hasUpdates -> {
+                    if (hasUpdates) {
+                        return asyncLoad(imageId, executor);
+                    }
+                    return CompletableFuture.completedFuture(oldImage);
+                });
+        }
+    });
+
+CompletableFuture<Image> imageFuture = imageCache.get("photo.jpg");
+```
+
+### Bulk Async Loading
+
+```java
+AsyncLoadingCache<String, StockPrice> priceCache = Caffeine.newBuilder()
+    .maximumSize(1000)
+    .refreshAfterWrite(Duration.ofSeconds(10))
+    .buildAsync(new AsyncCacheLoader<String, StockPrice>() {
+        @Override
+        public CompletableFuture<StockPrice> asyncLoad(String symbol, Executor executor) {
+            return stockApi.getPriceAsync(symbol);
+        }
+        
+        @Override
+        public CompletableFuture<Map<String, StockPrice>> asyncLoadAll(
+                Set<String> symbols, Executor executor) {
+            // Efficient batch API call
+            return stockApi.getPricesBatchAsync(symbols);
+        }
+    });
+
+List<String> symbols = Arrays.asList("AAPL", "GOOGL", "MSFT");
+
+CompletableFuture<Map<String, StockPrice>> pricesFuture = priceCache.getAll(symbols);
+pricesFuture.thenAccept(prices -> {
+    prices.forEach((symbol, price) -> {
+        System.out.printf("%s: $%.2f%n", symbol, price.getValue());
+    });
+});
+```
+
+### Error Handling
+
+```java
+AsyncLoadingCache<String, Report> reportCache = Caffeine.newBuilder()
+    .maximumSize(100)
+    .buildAsync((reportId, executor) -> {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return reportService.generateReport(reportId);
+            } catch (ReportException e) {
+                // Transform to unchecked exception
+                throw new CompletionException(e);
+            }
+        }, executor);
+    });
+
+reportCache.get("monthly-sales")
+    .thenAccept(report -> displayReport(report))
+    .exceptionally(ex -> {
+        Throwable cause = ex.getCause();
+        if (cause instanceof ReportException) {
+            System.err.println("Report generation failed: " + cause.getMessage());
+        } else {
+            System.err.println("Unexpected error: " + ex.getMessage());
+        }
+        return null;
+    });
+```
+
+### With Automatic Refresh
+
+```java
+AsyncLoadingCache<String, Feed> feedCache = Caffeine.newBuilder()
+    .maximumSize(50)
+    .refreshAfterWrite(Duration.ofMinutes(5))
+    .buildAsync((feedId, executor) -> {
+        return feedService.fetchFeedAsync(feedId);
+    });
+
+// First request loads the feed
+CompletableFuture<Feed> feed1 = feedCache.get("news-feed");
+
+// After 5 minutes, next request triggers async refresh
+// Old feed is returned immediately in the future,
+// while new feed loads in background
+CompletableFuture<Feed> feed2 = feedCache.get("news-feed");
+```
+
+### Chaining Multiple Caches
+
+```java
+AsyncLoadingCache<String, User> userCache = Caffeine.newBuilder()
+    .maximumSize(5000)
+    .buildAsync((userId, executor) -> userService.loadUserAsync(userId));
+
+AsyncLoadingCache<String, List<Order>> orderCache = Caffeine.newBuilder()
+    .maximumSize(5000)
+    .buildAsync((userId, executor) -> orderService.loadOrdersAsync(userId));
+
+// Chain cache lookups
+CompletableFuture<OrderSummary> summaryFuture = 
+    userCache.get("user123")
+        .thenCompose(user -> 
+            orderCache.get(user.getId())
+                .thenApply(orders -> new OrderSummary(user, orders)));
+
+summaryFuture.thenAccept(summary -> {
+    displayOrderSummary(summary);
+});
+```
+
+### Mixed Sync/Async Operations
+
+```java
+AsyncLoadingCache<String, Config> asyncCache = Caffeine.newBuilder()
+    .maximumSize(100)
+    .buildAsync(key -> loadConfigAsync(key));
+
+// Async operations
+CompletableFuture<Config> asyncConfig = asyncCache.get("app.config");
+asyncConfig.thenAccept(config -> applyConfig(config));
+
+// Synchronous operations when needed
+LoadingCache<String, Config> syncCache = asyncCache.synchronous();
+try {
+    Config config = syncCache.get("critical.config"); // Blocks until loaded
+    applyCriticalConfig(config);
+} catch (Exception e) {
+    System.err.println("Failed to load critical config: " + e.getMessage());
+}
+```
+
+### With Statistics
+
+```java
+AsyncLoadingCache<String, AnalyticsData> analyticsCache = Caffeine.newBuilder()
+    .maximumSize(1000)
+    .recordStats()
+    .buildAsync((dataId, executor) -> 
+        analyticsService.loadDataAsync(dataId));
+
+// Use the cache
+for (String dataId : requestedAnalytics) {
+    analyticsCache.get(dataId)
+        .thenAccept(data -> processAnalytics(data));
+}
+
+// Check statistics via synchronous view
+CacheStats stats = analyticsCache.synchronous().stats();
+System.out.printf("Hit rate: %.2f%%%n", stats.hitRate() * 100);
+System.out.printf("Average load time: %.2f ms%n", 
+    stats.averageLoadPenalty() / 1_000_000.0);
+System.out.printf("Load failures: %d%n", stats.loadFailureCount());
+```
+
+## Related APIs
+
+- [Caffeine](/api/caffeine) - Builder for creating cache instances
+- [AsyncCache](/api/async-cache) - Base async cache interface
+- [LoadingCache](/api/loading-cache) - Synchronous loading cache
+- [CacheLoader](/api/cache-loader) - Async and sync value loading interfaces
+- [CompletableFuture](https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/util/concurrent/CompletableFuture.html) - Java async computation

@@ -1,0 +1,509 @@
+---
+title: Cache Simulator
+description: Test and compare cache eviction policies using access trace simulation
+---
+
+The Caffeine simulator is a powerful tool for evaluating cache policies against real-world access traces, helping you choose the optimal configuration for your workload.
+
+## Overview
+
+The simulator broadcasts recorded cache events to various policy implementations and generates comparative reports on hit rates, evictions, and other metrics.
+
+### Use Cases
+
+- Compare different eviction policies (LRU, LFU, TinyLFU, etc.)
+- Evaluate cache size requirements for your workload
+- Test custom cache policies before production deployment
+- Analyze trace files from production systems
+- Optimize cache configuration parameters
+
+## Installation
+
+Add the simulator module to your project:
+
+<CodeGroup>
+```gradle Gradle
+implementation 'com.github.ben-manes.caffeine:caffeine:3.2.3'
+implementation 'com.github.ben-manes.caffeine:simulator:3.2.3'
+```
+
+```maven Maven
+<dependency>
+  <groupId>com.github.ben-manes.caffeine</groupId>
+  <artifactId>caffeine</artifactId>
+  <version>3.2.3</version>
+</dependency>
+<dependency>
+  <groupId>com.github.ben-manes.caffeine</groupId>
+  <artifactId>simulator</artifactId>
+  <version>3.2.3</version>
+</dependency>
+```
+</CodeGroup>
+
+## Quick Start
+
+Run a simulation using Gradle:
+
+```bash
+# Run with default configuration
+./gradlew :simulator:run
+
+# Run with custom configuration
+./gradlew :simulator:run \
+  -Dcaffeine.simulator.maximum-size=1000 \
+  -Dcaffeine.simulator.report.output=results.txt
+```
+
+## Configuration
+
+Create an `application.conf` file to configure the simulator:
+
+```hocon
+caffeine.simulator {
+  # Actor configuration
+  actor {
+    mailbox-size = 10
+    batch-size = 1000
+  }
+  
+  # Report configuration
+  report {
+    format = table  # Options: table, csv
+    sort-by = policy
+    ascending = true
+    output = console  # Or file path: /path/to/report.txt
+  }
+  
+  # Random seed for reproducible results
+  random-seed = 1033096058
+  
+  # Cache size
+  maximum-size = 512
+  
+  # Policies to test
+  policies = [
+    opt.Unbounded,
+    opt.Clairvoyant,
+    linked.Lru,
+    linked.Lfu,
+    sketch.WindowTinyLfu,
+    product.Caffeine
+  ]
+  
+  # Trace configuration
+  trace {
+    # Path to trace files
+    files = [
+      "/path/to/trace.log"
+    ]
+    
+    # Trace format
+    format = lirs  # Options: lirs, arc, wikipedia, address, etc.
+  }
+}
+```
+
+<Steps>
+  <Step title="Define Cache Size">
+    Set `maximum-size` to the cache capacity you want to test.
+  </Step>
+  
+  <Step title="Select Policies">
+    Choose which eviction policies to compare from the available registry.
+  </Step>
+  
+  <Step title="Configure Trace">
+    Specify your trace files and format.
+  </Step>
+  
+  <Step title="Run Simulation">
+    Execute the simulator and review the results.
+  </Step>
+</Steps>
+
+## Available Policies
+
+The simulator includes implementations of many cache policies:
+
+### Optimal Policies
+
+```hocon
+policies = [
+  opt.Unbounded,      # No eviction (upper bound)
+  opt.Clairvoyant,    # Optimal with future knowledge
+]
+```
+
+### Linked List Policies
+
+```hocon
+policies = [
+  linked.Lru,         # Least Recently Used
+  linked.Mru,         # Most Recently Used
+  linked.Lfu,         # Least Frequently Used
+  linked.Mfu,         # Most Frequently Used
+  linked.Fifo,        # First In First Out
+  linked.Clock,       # Clock algorithm
+  linked.S4Lru,       # Segmented LRU
+  linked.Sieve,       # SIEVE algorithm
+  linked.MultiQueue,  # Multi-queue
+  linked.SegmentedLru # Segmented LRU
+]
+```
+
+### Sampled Policies
+
+```hocon
+policies = [
+  sampled.Lru,        # Sampled LRU
+  sampled.Lfu,        # Sampled LFU
+  sampled.Fifo,       # Sampled FIFO
+  sampled.Random,     # Random eviction
+  sampled.Hyperbolic  # Hyperbolic sampling
+]
+```
+
+### Advanced Policies
+
+```hocon
+policies = [
+  sketch.WindowTinyLfu,              # Caffeine's default policy
+  sketch.S4WindowTinyLfu,            # Segmented Window TinyLFU
+  sketch.HillClimberWindowTinyLfu,   # Adaptive Window TinyLFU
+  two-queue.TwoQueue,                # 2Q algorithm
+  two-queue.S3Fifo,                  # S3-FIFO
+  irr.Lirs,                          # LIRS
+  irr.ClockPro,                      # Clock-Pro
+  adaptive.Arc,                      # Adaptive Replacement Cache
+  adaptive.Car                       # Clock with Adaptive Replacement
+]
+```
+
+### Product Implementations
+
+```hocon
+policies = [
+  product.Caffeine,    # Caffeine cache
+  product.Guava,       # Google Guava
+  product.Cache2k,     # Cache2k
+  product.Ehcache3,    # Ehcache 3
+  product.Hazelcast,   # Hazelcast
+  product.TCache       # TCache
+]
+```
+
+## Trace Formats
+
+The simulator supports multiple trace formats:
+
+### LIRS Format
+
+Simple format with one key per line:
+
+```text
+key1
+key2
+key1
+key3
+key2
+```
+
+### Address Format
+
+Memory addresses (automatically scaled):
+
+```text
+0x7fff5fbff000
+0x7fff5fbff008
+0x7fff5fbff010
+```
+
+### ARC Format
+
+With timestamps:
+
+```text
+1234567890 key1
+1234567891 key2
+1234567892 key1
+```
+
+### Wikipedia Format
+
+Wikipedia access logs:
+
+```text
+20230101-120000 en PageTitle 100 200
+```
+
+## Generating Synthetic Traces
+
+Create synthetic workloads for testing:
+
+```hocon
+caffeine.simulator {
+  trace {
+    synthetic {
+      # Generate synthetic trace
+      distribution = uniform  # Options: uniform, exponential, hotspot, zipfian
+      
+      # Number of unique keys
+      items = 10000
+      
+      # Number of operations
+      events = 100000
+    }
+  }
+}
+```
+
+### Distribution Types
+
+<CodeGroup>
+```hocon Uniform
+synthetic {
+  distribution = uniform
+  items = 10000
+  events = 100000
+}
+```
+
+```hocon Zipfian
+synthetic {
+  distribution = zipfian
+  items = 10000
+  events = 100000
+  # Skew parameter (higher = more skewed)
+  skew = 0.99
+}
+```
+
+```hocon Hotspot
+synthetic {
+  distribution = hotspot
+  items = 10000
+  events = 100000
+  # Percentage of hot items
+  hotset-fraction = 0.2
+  # Percentage of accesses to hot items
+  hotset-opn-fraction = 0.8
+}
+```
+</CodeGroup>
+
+## Running Simulations
+
+### Command Line
+
+```bash
+# Basic simulation
+java -jar simulator.jar
+
+# With custom config
+java -jar simulator.jar -c application.conf
+
+# Override properties
+java -jar simulator.jar \
+  -Dcaffeine.simulator.maximum-size=1024 \
+  -Dcaffeine.simulator.policies.0=sketch.WindowTinyLfu
+
+# Multiple simulations with different sizes
+./gradlew :simulator:simulate \
+  --maximumSize=512,1024,2048,4096 \
+  --metric="Hit Rate" \
+  --title="Cache Size Comparison"
+```
+
+### Programmatic Usage
+
+```java
+import com.github.benmanes.caffeine.cache.simulator.Simulator;
+import com.typesafe.config.Config;
+import com.typesafe.config.ConfigFactory;
+
+public class SimulatorRunner {
+    public static void main(String[] args) {
+        // Load configuration
+        Config config = ConfigFactory.load();
+        
+        // Run simulation
+        Simulator simulator = new Simulator(config);
+        simulator.run();
+    }
+}
+```
+
+## Report Formats
+
+### Table Format
+
+```text
+┌─────────────────────┬──────────┬──────────┬──────────┬───────────┐
+│ Policy              │ Hit Rate │ Hits     │ Misses   │ Evictions │
+├─────────────────────┼──────────┼──────────┼──────────┼───────────┤
+│ opt.Unbounded       │ 100.00%  │ 100,000  │ 0        │ 0         │
+│ sketch.WindowTinyLfu│ 47.23%   │ 47,230   │ 52,770   │ 52,258    │
+│ linked.Lru          │ 45.12%   │ 45,120   │ 54,880   │ 54,368    │
+│ sampled.Random      │ 32.45%   │ 32,450   │ 67,550   │ 67,038    │
+└─────────────────────┴──────────┴──────────┴──────────┴───────────┘
+```
+
+### CSV Format
+
+```csv
+Policy,Hit Rate,Hits,Misses,Evictions,Admit Rate,Steps,Time
+opt.Unbounded,100.0,100000,0,0,100.0,100000,1234
+sketch.WindowTinyLfu,47.23,47230,52770,52258,82.5,100000,1456
+linked.Lru,45.12,45120,54880,54368,100.0,100000,1389
+```
+
+### Generating Charts
+
+```bash
+# Generate comparison chart
+./gradlew :simulator:simulate \
+  --maximumSize=100,200,500,1000,2000,5000 \
+  --metric="Hit Rate" \
+  --theme=light \
+  --title="Policy Comparison" \
+  --outputDir=build/reports
+```
+
+## Advanced Configuration
+
+### Multi-Size Simulation
+
+Test multiple cache sizes in one run:
+
+```hocon
+caffeine.simulator {
+  maximum-sizes = [256, 512, 1024, 2048, 4096]
+  
+  policies = [
+    sketch.WindowTinyLfu,
+    linked.Lru,
+    irr.ClockPro
+  ]
+}
+```
+
+### Trace Sampling
+
+Process subset of trace events:
+
+```hocon
+caffeine.simulator {
+  trace {
+    files = ["large-trace.log"]
+    format = lirs
+    
+    # Skip first N events (warmup)
+    skip = 10000
+    
+    # Process only N events
+    limit = 100000
+  }
+}
+```
+
+### Custom Policy
+
+Implement your own cache policy:
+
+```java
+import com.github.benmanes.caffeine.cache.simulator.policy.Policy;
+import com.github.benmanes.caffeine.cache.simulator.policy.AccessEvent;
+
+public class CustomPolicy implements Policy {
+    private final PolicyStats stats;
+    private final long maximumSize;
+    
+    @Override
+    public void record(AccessEvent event) {
+        // Implement your cache logic
+        boolean hit = cache.containsKey(event.key());
+        
+        if (hit) {
+            stats.recordHit();
+        } else {
+            stats.recordMiss();
+            cache.put(event.key(), event.value());
+            
+            if (cache.size() > maximumSize) {
+                evict();
+            }
+        }
+    }
+    
+    private void evict() {
+        // Your eviction logic
+        stats.recordEviction();
+    }
+}
+```
+
+## Performance Tips
+
+1. **Use batch processing** - Increase `batch-size` for faster simulation
+2. **Limit trace size** - Use `skip` and `limit` for large traces
+3. **Reduce policy count** - Test fewer policies at once
+4. **Enable parallel processing** - Policies run concurrently by default
+5. **Allocate sufficient memory** - Use `-Xmx` for large simulations
+
+## Common Use Cases
+
+### Sizing Your Cache
+
+```bash
+# Test multiple sizes to find optimal capacity
+./gradlew :simulator:simulate \
+  --maximumSize=100,250,500,1000,2500,5000,10000 \
+  --metric="Hit Rate"
+```
+
+### Comparing Policies
+
+```hocon
+caffeine.simulator {
+  maximum-size = 1000
+  
+  policies = [
+    sketch.WindowTinyLfu,
+    linked.Lru,
+    linked.Lfu,
+    irr.Lirs,
+    adaptive.Arc
+  ]
+}
+```
+
+### Production Trace Analysis
+
+```hocon
+caffeine.simulator {
+  trace {
+    files = ["production-access.log"]
+    format = custom
+    
+    # Analyze last 1M requests
+    skip = 0
+    limit = 1000000
+  }
+  
+  maximum-size = 10000
+  
+  report {
+    format = csv
+    output = "analysis-results.csv"
+  }
+}
+```
+
+<Note>
+  The simulator is invaluable for understanding how different cache policies perform with your specific workload patterns before deploying to production.
+</Note>
+
+<Warning>
+  Simulation results depend heavily on your access patterns. Always test with representative traces from your actual workload.
+</Warning>

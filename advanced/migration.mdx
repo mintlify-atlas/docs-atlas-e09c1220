@@ -1,0 +1,732 @@
+---
+title: Migration Guide
+description: Migrate from Guava Cache, ConcurrentHashMap, and other caching libraries to Caffeine
+---
+
+Migrating to Caffeine is straightforward thanks to its familiar API design. This guide covers migration from popular caching solutions with before/after examples.
+
+## Why Migrate to Caffeine?
+
+<CardGroup cols={2}>
+  <Card title="Better Performance" icon="rocket">
+    20-30% higher throughput and better latency than alternatives
+  </Card>
+  
+  <Card title="Superior Hit Rates" icon="bullseye">
+    W-TinyLFU eviction policy achieves 20-30% better hit rates than LRU
+  </Card>
+  
+  <Card title="Modern API" icon="code">
+    Java 8+ features including lambdas, CompletableFuture, and streams
+  </Card>
+  
+  <Card title="Active Development" icon="wrench">
+    Regular updates, bug fixes, and new features
+  </Card>
+</CardGroup>
+
+## Migration from Guava Cache
+
+Caffeine provides a Guava adapter for seamless migration.
+
+### Basic Cache Migration
+
+<Tabs>
+  <Tab title="Before (Guava)">
+    ```java
+    import com.google.common.cache.Cache;
+    import com.google.common.cache.CacheBuilder;
+    import java.util.concurrent.TimeUnit;
+    
+    Cache<Key, Value> cache = CacheBuilder.newBuilder()
+        .maximumSize(10_000)
+        .expireAfterWrite(10, TimeUnit.MINUTES)
+        .recordStats()
+        .build();
+    
+    // Get with manual loading
+    Value value = cache.getIfPresent(key);
+    if (value == null) {
+      value = loadValue(key);
+      cache.put(key, value);
+    }
+    ```
+  </Tab>
+  
+  <Tab title="After (Caffeine)">
+    ```java
+    import com.github.benmanes.caffeine.cache.Cache;
+    import com.github.benmanes.caffeine.cache.Caffeine;
+    import java.time.Duration;
+    
+    Cache<Key, Value> cache = Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .expireAfterWrite(Duration.ofMinutes(10))
+        .recordStats()
+        .build();
+    
+    // Get with manual loading (same API)
+    Value value = cache.getIfPresent(key);
+    if (value == null) {
+      value = loadValue(key);
+      cache.put(key, value);
+    }
+    ```
+  </Tab>
+</Tabs>
+
+<Info>
+The basic API is nearly identical! Main difference: Caffeine uses `Duration` instead of `TimeUnit` for a more modern API.
+</Info>
+
+### Loading Cache Migration
+
+<Tabs>
+  <Tab title="Before (Guava)">
+    ```java
+    import com.google.common.cache.CacheLoader;
+    import com.google.common.cache.LoadingCache;
+    
+    LoadingCache<Key, Value> cache = CacheBuilder.newBuilder()
+        .maximumSize(10_000)
+        .build(new CacheLoader<Key, Value>() {
+          @Override
+          public Value load(Key key) throws Exception {
+            return loadValue(key);
+          }
+          
+          @Override
+          public Map<Key, Value> loadAll(Iterable<? extends Key> keys) {
+            return loadValues(keys);
+          }
+        });
+    
+    // Automatic loading
+    Value value = cache.get(key);
+    Map<Key, Value> values = cache.getAll(keys);
+    ```
+  </Tab>
+  
+  <Tab title="After (Caffeine)">
+    ```java
+    import com.github.benmanes.caffeine.cache.CacheLoader;
+    import com.github.benmanes.caffeine.cache.LoadingCache;
+    
+    LoadingCache<Key, Value> cache = Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .build(new CacheLoader<Key, Value>() {
+          @Override
+          public Value load(Key key) throws Exception {
+            return loadValue(key);
+          }
+          
+          @Override
+          public Map<Key, Value> loadAll(Set<? extends Key> keys) {
+            return loadValues(keys);
+          }
+        });
+    
+    // Automatic loading (same API)
+    Value value = cache.get(key);
+    Map<Key, Value> values = cache.getAll(keys);
+    ```
+  </Tab>
+</Tabs>
+
+### Lambda-Based Loading (Modern Style)
+
+<Tabs>
+  <Tab title="Before (Guava)">
+    ```java
+    LoadingCache<Key, Value> cache = CacheBuilder.newBuilder()
+        .maximumSize(10_000)
+        .build(CacheLoader.from(key -> loadValue(key)));
+    ```
+  </Tab>
+  
+  <Tab title="After (Caffeine)">
+    ```java
+    LoadingCache<Key, Value> cache = Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .build(key -> loadValue(key));
+    
+    // Even simaner with method reference
+    LoadingCache<Key, Value> cache = Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .build(this::loadValue);
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+Caffeine's builder accepts lambda expressions directly, eliminating the need for anonymous inner classes or adapter methods.
+</Note>
+
+### Removal Listener Migration
+
+<Tabs>
+  <Tab title="Before (Guava)">
+    ```java
+    import com.google.common.cache.RemovalListener;
+    import com.google.common.cache.RemovalNotification;
+    
+    Cache<Key, Value> cache = CacheBuilder.newBuilder()
+        .removalListener(new RemovalListener<Key, Value>() {
+          @Override
+          public void onRemoval(RemovalNotification<Key, Value> notification) {
+            Key key = notification.getKey();
+            Value value = notification.getValue();
+            RemovalCause cause = notification.getCause();
+            handleRemoval(key, value, cause);
+          }
+        })
+        .build();
+    ```
+  </Tab>
+  
+  <Tab title="After (Caffeine)">
+    ```java
+    import com.github.benmanes.caffeine.cache.RemovalListener;
+    import com.github.benmanes.caffeine.cache.RemovalCause;
+    
+    Cache<Key, Value> cache = Caffeine.newBuilder()
+        .removalListener((key, value, cause) -> {
+          handleRemoval(key, value, cause);
+        })
+        .build();
+    
+    // Even cleaner with method reference
+    Cache<Key, Value> cache = Caffeine.newBuilder()
+        .removalListener(this::handleRemoval)
+        .build();
+    ```
+  </Tab>
+</Tabs>
+
+### Using the Guava Adapter
+
+For gradual migration, use Caffeine's Guava adapter:
+
+<Steps>
+  <Step title="Add Guava adapter dependency">
+    ```xml
+    <dependency>
+      <groupId>com.github.ben-manes.caffeine</groupId>
+      <artifactId>guava</artifactId>
+      <version>3.2.3</version>
+    </dependency>
+    ```
+  </Step>
+  
+  <Step title="Wrap Caffeine cache as Guava cache">
+    ```java
+    import com.github.benmanes.caffeine.guava.CaffeinatedGuava;
+    
+    // Create Caffeine cache
+    com.github.benmanes.caffeine.cache.Cache<Key, Value> caffeineCache = 
+        Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .build();
+    
+    // Wrap as Guava cache
+    com.google.common.cache.Cache<Key, Value> guavaCache = 
+        CaffeinatedGuava.build(caffeineCache);
+    
+    // Use Guava API
+    guavaCache.put(key, value);
+    Value value = guavaCache.getIfPresent(key);
+    ```
+  </Step>
+  
+  <Step title="Migrate incrementally">
+    Replace Guava caches one at a time while maintaining the same API.
+    
+    Once migration is complete, remove the adapter and use Caffeine's API directly.
+  </Step>
+</Steps>
+
+<Info>
+The Guava adapter provides 100% API compatibility, making it perfect for large codebases where immediate full migration isn't feasible.
+</Info>
+
+## Migration from ConcurrentHashMap
+
+If you're using `ConcurrentHashMap` as a cache without eviction, Caffeine provides significant benefits.
+
+### Basic Map to Cache
+
+<Tabs>
+  <Tab title="Before (ConcurrentHashMap)">
+    ```java
+    import java.util.concurrent.ConcurrentHashMap;
+    
+    ConcurrentHashMap<Key, Value> map = new ConcurrentHashMap<>();
+    
+    // Manual get-or-compute
+    Value value = map.get(key);
+    if (value == null) {
+      value = loadValue(key);
+      Value existing = map.putIfAbsent(key, value);
+      if (existing != null) {
+        value = existing;
+      }
+    }
+    
+    // Or using computeIfAbsent
+    Value value = map.computeIfAbsent(key, k -> loadValue(k));
+    ```
+  </Tab>
+  
+  <Tab title="After (Caffeine)">
+    ```java
+    import com.github.benmanes.caffeine.cache.Cache;
+    import com.github.benmanes.caffeine.cache.Caffeine;
+    
+    Cache<Key, Value> cache = Caffeine.newBuilder()
+        .maximumSize(10_000)  // Now with automatic eviction!
+        .build();
+    
+    // Simpler and thread-safe
+    Value value = cache.get(key, k -> loadValue(k));
+    ```
+  </Tab>
+</Tabs>
+
+### Adding Eviction
+
+<Tabs>
+  <Tab title="Before (Manual Eviction)">
+    ```java
+    // Manual size-based eviction
+    ConcurrentHashMap<Key, CacheEntry> map = new ConcurrentHashMap<>();
+    AtomicInteger size = new AtomicInteger();
+    
+    void put(Key key, Value value) {
+      map.put(key, new CacheEntry(value, System.currentTimeMillis()));
+      
+      if (size.incrementAndGet() > MAX_SIZE) {
+        // Manual eviction - inefficient!
+        map.entrySet().stream()
+            .min(Comparator.comparingLong(e -> e.getValue().timestamp))
+            .ifPresent(e -> {
+              map.remove(e.getKey());
+              size.decrementAndGet();
+            });
+      }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="After (Automatic Eviction)">
+    ```java
+    // Automatic size-based eviction with optimal policy
+    Cache<Key, Value> cache = Caffeine.newBuilder()
+        .maximumSize(MAX_SIZE)
+        .build();
+    
+    void put(Key key, Value value) {
+      cache.put(key, value);
+      // Eviction handled automatically with W-TinyLFU
+    }
+    ```
+  </Tab>
+</Tabs>
+
+<Accordion title="Benefits of Caffeine over manual eviction">
+  - **Optimal eviction policy**: W-TinyLFU vs. simple timestamp-based
+  - **O(1) complexity**: No need to scan entire map
+  - **Better hit rates**: 20-30% improvement over LRU
+  - **Automatic**: No manual bookkeeping
+  - **Concurrent**: Thread-safe without explicit synchronization
+</Accordion>
+
+### Adding Expiration
+
+<Tabs>
+  <Tab title="Before (Manual Expiration)">
+    ```java
+    static class CacheEntry {
+      Value value;
+      long timestamp;
+      
+      boolean isExpired() {
+        return System.currentTimeMillis() - timestamp > EXPIRATION_MS;
+      }
+    }
+    
+    ConcurrentHashMap<Key, CacheEntry> map = new ConcurrentHashMap<>();
+    
+    Value get(Key key) {
+      CacheEntry entry = map.get(key);
+      if (entry == null || entry.isExpired()) {
+        if (entry != null) {
+          map.remove(key);  // Manual cleanup
+        }
+        return null;
+      }
+      return entry.value;
+    }
+    
+    // Need periodic cleanup task
+    scheduledExecutor.scheduleAtFixedRate(() -> {
+      map.entrySet().removeIf(e -> e.getValue().isExpired());
+    }, 1, 1, TimeUnit.MINUTES);
+    ```
+  </Tab>
+  
+  <Tab title="After (Automatic Expiration)">
+    ```java
+    import java.time.Duration;
+    
+    Cache<Key, Value> cache = Caffeine.newBuilder()
+        .expireAfterWrite(Duration.ofMinutes(10))
+        .build();
+    
+    Value get(Key key) {
+      return cache.getIfPresent(key);
+      // Expiration handled automatically, no cleanup needed
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Migration from Ehcache
+
+<Tabs>
+  <Tab title="Before (Ehcache 3)">
+    ```java
+    import org.ehcache.Cache;
+    import org.ehcache.CacheManager;
+    import org.ehcache.config.builders.*;
+    import org.ehcache.expiry.Expirations;
+    
+    CacheManager cacheManager = CacheManagerBuilder.newCacheManagerBuilder()
+        .build(true);
+    
+    Cache<Key, Value> cache = cacheManager.createCache("myCache",
+        CacheConfigurationBuilder.newCacheConfigurationBuilder(
+            Key.class, Value.class,
+            ResourcePoolsBuilder.heap(10_000))
+            .withExpiry(Expirations.timeToLiveExpiration(
+                Duration.ofMinutes(10)))
+            .build());
+    
+    // Usage
+    cache.put(key, value);
+    Value value = cache.get(key);
+    ```
+  </Tab>
+  
+  <Tab title="After (Caffeine)">
+    ```java
+    import com.github.benmanes.caffeine.cache.Cache;
+    import com.github.benmanes.caffeine.cache.Caffeine;
+    import java.time.Duration;
+    
+    Cache<Key, Value> cache = Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .expireAfterWrite(Duration.ofMinutes(10))
+        .build();
+    
+    // Usage (same)
+    cache.put(key, value);
+    Value value = cache.getIfPresent(key);
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+Caffeine's API is significantly simpler than Ehcache while providing better performance. No separate CacheManager needed.
+</Note>
+
+## Migration from JSR-107 (JCache)
+
+Caffeine supports JSR-107 through an adapter:
+
+<Steps>
+  <Step title="Add JCache adapter dependency">
+    ```xml
+    <dependency>
+      <groupId>com.github.ben-manes.caffeine</groupId>
+      <artifactId>jcache</artifactId>
+      <version>3.2.3</version>
+    </dependency>
+    <dependency>
+      <groupId>javax.cache</groupId>
+      <artifactId>cache-api</artifactId>
+      <version>1.1.1</version>
+    </dependency>
+    ```
+  </Step>
+  
+  <Step title="Configure Caffeine as JCache provider">
+    ```java
+    import javax.cache.Caching;
+    import javax.cache.CacheManager;
+    import javax.cache.configuration.MutableConfiguration;
+    
+    CacheManager cacheManager = Caching.getCachingProvider(
+        "com.github.benmanes.caffeine.jcache.spi.CaffeineCachingProvider"
+    ).getCacheManager();
+    
+    MutableConfiguration<Key, Value> config = 
+        new MutableConfiguration<Key, Value>()
+            .setTypes(Key.class, Value.class)
+            .setStatisticsEnabled(true);
+    
+    javax.cache.Cache<Key, Value> cache = 
+        cacheManager.createCache("myCache", config);
+    ```
+  </Step>
+  
+  <Step title="Use standard JCache API">
+    ```java
+    // Standard JSR-107 API
+    cache.put(key, value);
+    Value value = cache.get(key);
+    cache.remove(key);
+    ```
+  </Step>
+</Steps>
+
+<Info>
+The JCache adapter allows you to use Caffeine with JCache-compatible frameworks like Spring Cache.
+</Info>
+
+## Common Migration Patterns
+
+### Pattern 1: Simple Cache
+
+```java
+// Any library → Caffeine
+Cache<Key, Value> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .build();
+
+cache.put(key, value);
+Value value = cache.getIfPresent(key);
+```
+
+### Pattern 2: Loading Cache
+
+```java
+// Any library → Caffeine
+LoadingCache<Key, Value> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .build(key -> loadValue(key));
+
+Value value = cache.get(key);  // Auto-loads if missing
+```
+
+### Pattern 3: Async Loading Cache
+
+```java
+// Caffeine's unique async capabilities
+AsyncLoadingCache<Key, Value> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .buildAsync((key, executor) -> 
+        CompletableFuture.supplyAsync(() -> loadValue(key), executor));
+
+CompletableFuture<Value> future = cache.get(key);
+```
+
+### Pattern 4: Write-Through Cache
+
+```java
+// Using removal listener for write-through
+Cache<Key, Value> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .removalListener((key, value, cause) -> {
+      if (cause.wasEvicted()) {
+        writeToDatabase(key, value);
+      }
+    })
+    .build();
+```
+
+## API Mapping Reference
+
+### Core Operations
+
+| Operation | Guava | Caffeine |
+|-----------|-------|----------|
+| Get if present | `getIfPresent(key)` | `getIfPresent(key)` |
+| Get with load | `get(key)` | `get(key)` |
+| Get with function | `get(key, callable)` | `get(key, function)` |
+| Put | `put(key, value)` | `put(key, value)` |
+| Put all | `putAll(map)` | `putAll(map)` |
+| Invalidate | `invalidate(key)` | `invalidate(key)` |
+| Invalidate all | `invalidateAll()` | `invalidateAll()` |
+| Size | `size()` | `estimatedSize()` |
+| Stats | `stats()` | `stats()` |
+
+### Configuration
+
+| Feature | Guava | Caffeine |
+|---------|-------|----------|
+| Max size | `maximumSize(long)` | `maximumSize(long)` |
+| Max weight | `maximumWeight(long)` | `maximumWeight(long)` |
+| Weigher | `weigher(Weigher)` | `weigher(Weigher)` |
+| Expire after write | `expireAfterWrite(duration, unit)` | `expireAfterWrite(Duration)` |
+| Expire after access | `expireAfterAccess(duration, unit)` | `expireAfterAccess(Duration)` |
+| Custom expiry | N/A | `expireAfter(Expiry)` |
+| Refresh | `refreshAfterWrite(duration, unit)` | `refreshAfterWrite(Duration)` |
+| Weak keys | `weakKeys()` | `weakKeys()` |
+| Weak values | `weakValues()` | `weakValues()` |
+| Soft values | `softValues()` | `softValues()` |
+| Stats | `recordStats()` | `recordStats()` |
+| Removal listener | `removalListener(listener)` | `removalListener(listener)` |
+
+<Note>
+Most method names are identical. Main differences are using `Duration` instead of `TimeUnit` and `estimatedSize()` instead of `size()`.
+</Note>
+
+## Migration Checklist
+
+<Steps>
+  <Step title="Update dependencies">
+    Replace old caching library with Caffeine in your build file.
+    
+    ```xml
+    <dependency>
+      <groupId>com.github.ben-manes.caffeine</groupId>
+      <artifactId>caffeine</artifactId>
+      <version>3.2.3</version>
+    </dependency>
+    ```
+  </Step>
+  
+  <Step title="Update imports">
+    Change package imports from old library to Caffeine.
+    
+    ```java
+    // Before
+    import com.google.common.cache.*;
+    
+    // After
+    import com.github.benmanes.caffeine.cache.*;
+    ```
+  </Step>
+  
+  <Step title="Update builder calls">
+    Change builder syntax if needed (mainly time units).
+    
+    ```java
+    // Before
+    .expireAfterWrite(10, TimeUnit.MINUTES)
+    
+    // After
+    .expireAfterWrite(Duration.ofMinutes(10))
+    ```
+  </Step>
+  
+  <Step title="Update size() calls">
+    Caffeine uses `estimatedSize()` for better performance.
+    
+    ```java
+    // Before
+    long size = cache.size();
+    
+    // After
+    long size = cache.estimatedSize();
+    ```
+  </Step>
+  
+  <Step title="Test thoroughly">
+    Run your test suite to ensure correct behavior.
+    
+    Pay special attention to:
+    - Concurrency tests
+    - Eviction behavior
+    - Statistics accuracy
+  </Step>
+  
+  <Step title="Measure performance">
+    Benchmark before and after to quantify improvements.
+    
+    You should see:
+    - Higher throughput
+    - Better hit rates
+    - Lower latencies
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<Accordion title="Cache seems smaller than configured size">
+  Caffeine uses `estimatedSize()` which may not reflect the exact count due to concurrent operations and pending cleanup.
+  
+  Use `cleanUp()` before checking size if exact count is needed:
+  ```java
+  cache.cleanUp();
+  long size = cache.estimatedSize();
+  ```
+</Accordion>
+
+<Accordion title="Removal listener not called immediately">
+  Removal listeners are invoked asynchronously by default. For synchronous execution:
+  
+  ```java
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .executor(Runnable::run)  // Synchronous execution
+      .removalListener((k, v, cause) -> handleRemoval(k, v, cause))
+      .build();
+  ```
+</Accordion>
+
+<Accordion title="Statistics show unexpected values">
+  Statistics are eventually consistent. For accurate stats:
+  
+  ```java
+  cache.cleanUp();  // Force pending operations
+  CacheStats stats = cache.stats();
+  ```
+</Accordion>
+
+<Accordion title="Different eviction behavior than old library">
+  Caffeine uses W-TinyLFU instead of LRU. This is intentional and provides better hit rates, but the specific entries evicted may differ.
+  
+  If you need exact LRU behavior (not recommended), consider using a different library or implementing a custom policy.
+</Accordion>
+
+## Getting Help
+
+If you encounter issues during migration:
+
+<CardGroup cols={2}>
+  <Card title="GitHub Issues" icon="github" href="https://github.com/ben-manes/caffeine/issues">
+    Search existing issues or create a new one
+  </Card>
+  
+  <Card title="Stack Overflow" icon="stack-overflow" href="https://stackoverflow.com/questions/tagged/caffeine">
+    Ask questions with the `caffeine` tag
+  </Card>
+  
+  <Card title="API Documentation" icon="book" href="https://www.javadoc.io/doc/com.github.ben-manes.caffeine/caffeine">
+    Browse the complete API reference
+  </Card>
+  
+  <Card title="GitHub Discussions" icon="comments" href="https://github.com/ben-manes/caffeine/discussions">
+    Community discussions and help
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="sitemap" href="/advanced/architecture">
+    Understand Caffeine's internal design
+  </Card>
+  
+  <Card title="Efficiency" icon="gauge" href="/advanced/efficiency">
+    Learn about W-TinyLFU eviction policy
+  </Card>
+  
+  <Card title="Benchmarks" icon="chart-bar" href="/advanced/benchmarks">
+    See performance comparisons
+  </Card>
+  
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first Caffeine cache
+  </Card>
+</CardGroup>

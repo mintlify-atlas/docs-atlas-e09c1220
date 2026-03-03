@@ -1,0 +1,683 @@
+---
+title: 'CacheStats'
+description: 'Immutable snapshot of cache performance statistics'
+---
+
+## Overview
+
+`CacheStats` is an immutable value class that represents a snapshot of cache performance metrics. It tracks hits, misses, loads, evictions, and timing information to help monitor and optimize cache behavior.
+
+<Note>
+`CacheStats` is a value-based class. Avoid using identity-sensitive operations like `==`, `identityHashCode()`, or synchronization on instances.
+</Note>
+
+## Creating CacheStats
+
+### of
+
+Creates a new statistics instance with specified metrics.
+
+```java
+static CacheStats of(
+    long hitCount,
+    long missCount,
+    long loadSuccessCount,
+    long loadFailureCount,
+    long totalLoadTime,
+    long evictionCount,
+    long evictionWeight
+)
+```
+
+<ParamField path="hitCount" type="long" required>
+  Number of cache hits
+</ParamField>
+
+<ParamField path="missCount" type="long" required>
+  Number of cache misses
+</ParamField>
+
+<ParamField path="loadSuccessCount" type="long" required>
+  Number of successful loads
+</ParamField>
+
+<ParamField path="loadFailureCount" type="long" required>
+  Number of failed loads
+</ParamField>
+
+<ParamField path="totalLoadTime" type="long" required>
+  Total time spent loading in nanoseconds
+</ParamField>
+
+<ParamField path="evictionCount" type="long" required>
+  Number of evictions
+</ParamField>
+
+<ParamField path="evictionWeight" type="long" required>
+  Sum of weights of evicted entries
+</ParamField>
+
+**Example:**
+```java
+CacheStats stats = CacheStats.of(
+    1000,  // hits
+    100,   // misses
+    90,    // load successes
+    10,    // load failures
+    5_000_000_000L,  // total load time (5 seconds)
+    50,    // evictions
+    500    // eviction weight
+);
+```
+
+### empty
+
+Returns a statistics instance with all metrics at zero.
+
+```java
+static CacheStats empty()
+```
+
+**Example:**
+```java
+CacheStats initial = CacheStats.empty();
+assert initial.requestCount() == 0;
+```
+
+## Obtaining Cache Statistics
+
+Enable statistics recording when building the cache:
+
+```java
+Cache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .recordStats()
+    .build();
+
+// Retrieve current statistics
+CacheStats stats = cache.stats();
+System.out.println("Hit rate: " + stats.hitRate());
+```
+
+## Metrics
+
+### Request Metrics
+
+#### requestCount
+
+Total number of cache lookups (hits + misses).
+
+```java
+long requestCount()
+```
+
+**Returns:** `hitCount + missCount`
+
+**Example:**
+```java
+long total = stats.requestCount();
+System.out.println("Total requests: " + total);
+```
+
+#### hitCount
+
+Number of times a lookup returned a cached value.
+
+```java
+long hitCount()
+```
+
+**Example:**
+```java
+long hits = stats.hitCount();
+System.out.println("Cache hits: " + hits);
+```
+
+#### hitRate
+
+Ratio of cache hits to total requests.
+
+```java
+double hitRate()
+```
+
+**Returns:** Value between 0.0 and 1.0, or 1.0 when `requestCount == 0`
+
+**Example:**
+```java
+double rate = stats.hitRate();
+System.out.printf("Hit rate: %.2f%%\n", rate * 100);
+
+if (rate < 0.8) {
+    System.out.println("Warning: Low hit rate!");
+}
+```
+
+#### missCount
+
+Number of times a lookup didn't find a cached value.
+
+```java
+long missCount()
+```
+
+<Info>
+Multiple concurrent lookups for the same absent key count as multiple misses, but result in only one load operation.
+</Info>
+
+**Example:**
+```java
+long misses = stats.missCount();
+System.out.println("Cache misses: " + misses);
+```
+
+#### missRate
+
+Ratio of cache misses to total requests.
+
+```java
+double missRate()
+```
+
+**Returns:** Value between 0.0 and 1.0, or 0.0 when `requestCount == 0`
+
+**Example:**
+```java
+double rate = stats.missRate();
+System.out.printf("Miss rate: %.2f%%\n", rate * 100);
+
+// Note: hitRate + missRate ≈ 1.0
+assert Math.abs(stats.hitRate() + rate - 1.0) < 0.001;
+```
+
+### Load Metrics
+
+#### loadCount
+
+Total number of load attempts (successful + failed).
+
+```java
+long loadCount()
+```
+
+**Returns:** `loadSuccessCount + loadFailureCount`
+
+**Example:**
+```java
+long loads = stats.loadCount();
+System.out.println("Total loads: " + loads);
+```
+
+#### loadSuccessCount
+
+Number of successful value loads.
+
+```java
+long loadSuccessCount()
+```
+
+**Example:**
+```java
+long successes = stats.loadSuccessCount();
+System.out.println("Successful loads: " + successes);
+```
+
+#### loadFailureCount
+
+Number of failed load attempts (exception thrown or null returned).
+
+```java
+long loadFailureCount()
+```
+
+**Example:**
+```java
+long failures = stats.loadFailureCount();
+if (failures > 0) {
+    System.out.println("Warning: " + failures + " load failures");
+}
+```
+
+#### loadFailureRate
+
+Ratio of failed loads to total load attempts.
+
+```java
+double loadFailureRate()
+```
+
+**Returns:** Value between 0.0 and 1.0, or 0.0 when `loadCount == 0`
+
+**Example:**
+```java
+double failureRate = stats.loadFailureRate();
+if (failureRate > 0.1) {
+    System.out.println("High failure rate: " + failureRate);
+}
+```
+
+### Timing Metrics
+
+#### totalLoadTime
+
+Total time spent loading values in nanoseconds.
+
+```java
+long totalLoadTime()
+```
+
+**Returns:** Cumulative load time in nanoseconds
+
+**Example:**
+```java
+long nanos = stats.totalLoadTime();
+long millis = TimeUnit.NANOSECONDS.toMillis(nanos);
+System.out.println("Total load time: " + millis + "ms");
+```
+
+#### averageLoadPenalty
+
+Average time spent loading a value.
+
+```java
+double averageLoadPenalty()
+```
+
+**Returns:** Average load time in nanoseconds, or 0.0 when `loadCount == 0`
+
+**Example:**
+```java
+double avgNanos = stats.averageLoadPenalty();
+double avgMillis = avgNanos / 1_000_000.0;
+System.out.printf("Average load time: %.2fms\n", avgMillis);
+
+if (avgMillis > 100) {
+    System.out.println("Warning: Slow load times");
+}
+```
+
+### Eviction Metrics
+
+#### evictionCount
+
+Number of entries evicted from the cache.
+
+```java
+long evictionCount()
+```
+
+<Info>
+This does NOT include manual invalidations via `cache.invalidate()`.
+</Info>
+
+**Example:**
+```java
+long evictions = stats.evictionCount();
+System.out.println("Evictions: " + evictions);
+```
+
+#### evictionWeight
+
+Sum of weights of all evicted entries.
+
+```java
+long evictionWeight()
+```
+
+**Example:**
+```java
+long weight = stats.evictionWeight();
+System.out.println("Total evicted weight: " + weight);
+
+// Average weight per evicted entry
+if (stats.evictionCount() > 0) {
+    double avg = (double) weight / stats.evictionCount();
+    System.out.printf("Avg evicted weight: %.2f\n", avg);
+}
+```
+
+## Operations
+
+### plus
+
+Combines two statistics instances.
+
+```java
+CacheStats plus(CacheStats other)
+```
+
+<ParamField path="other" type="CacheStats" required>
+  Statistics to add
+</ParamField>
+
+**Returns:** New instance with summed metrics
+
+**Example:**
+```java
+CacheStats stats1 = cache1.stats();
+CacheStats stats2 = cache2.stats();
+
+// Aggregate statistics across multiple caches
+CacheStats total = stats1.plus(stats2);
+System.out.println("Combined hit rate: " + total.hitRate());
+```
+
+### minus
+
+Computes the difference between two statistics instances.
+
+```java
+CacheStats minus(CacheStats other)
+```
+
+<ParamField path="other" type="CacheStats" required>
+  Statistics to subtract
+</ParamField>
+
+**Returns:** New instance with difference (negative values rounded to zero)
+
+**Example:**
+```java
+CacheStats snapshot1 = cache.stats();
+// ... operations ...
+CacheStats snapshot2 = cache.stats();
+
+// Calculate delta
+CacheStats delta = snapshot2.minus(snapshot1);
+System.out.println("New hits: " + delta.hitCount());
+System.out.println("New misses: " + delta.missCount());
+```
+
+## Statistics Tracking Rules
+
+### What Increments Statistics
+
+**Hit Count:**
+- `cache.get(key)` finds existing entry
+- `cache.getAll(keys)` finds existing entries
+- `loadingCache.get(key)` finds existing entry
+
+**Miss Count:**
+- `cache.get(key, loader)` doesn't find entry (then loads)
+- `loadingCache.get(key)` doesn't find entry (then loads)
+- Waiting for another thread's load completes (concurrent miss)
+
+**Load Success:**
+- Loading function returns non-null value
+- `asMap().compute()` succeeds
+
+**Load Failure:**
+- Loading function throws exception
+- Loading function returns null
+- `asMap().compute()` throws exception
+
+**Eviction Count/Weight:**
+- Automatic eviction due to size/weight constraints
+- Expiration removes entry
+
+### What Does NOT Affect Statistics
+
+- `cache.getIfPresent(key)`
+- `cache.asMap().get(key)`
+- `cache.asMap().put(key, value)`
+- `cache.invalidate(key)` (manual removal)
+- `cache.invalidateAll()`
+- Operations on `cache.asMap()` collection views
+
+## Monitoring Examples
+
+### Basic Monitoring
+
+```java
+Cache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .recordStats()
+    .build();
+
+// Periodic monitoring
+ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+scheduler.scheduleAtFixedRate(() -> {
+    CacheStats stats = cache.stats();
+    
+    System.out.println("=== Cache Statistics ===");
+    System.out.printf("Requests: %d\n", stats.requestCount());
+    System.out.printf("Hit Rate: %.2f%%\n", stats.hitRate() * 100);
+    System.out.printf("Miss Rate: %.2f%%\n", stats.missRate() * 100);
+    System.out.printf("Loads: %d\n", stats.loadCount());
+    System.out.printf("Avg Load Time: %.2fms\n", 
+        stats.averageLoadPenalty() / 1_000_000.0);
+    System.out.printf("Evictions: %d\n", stats.evictionCount());
+}, 0, 1, TimeUnit.MINUTES);
+```
+
+### Delta Monitoring
+
+Track changes over time:
+
+```java
+public class CacheMonitor {
+    private CacheStats previous = CacheStats.empty();
+    
+    public void report(Cache<?, ?> cache) {
+        CacheStats current = cache.stats();
+        CacheStats delta = current.minus(previous);
+        
+        if (delta.requestCount() > 0) {
+            System.out.printf("Last minute: %d requests, %.2f%% hit rate\n",
+                delta.requestCount(),
+                delta.hitRate() * 100);
+        }
+        
+        previous = current;
+    }
+}
+```
+
+### Performance Analysis
+
+```java
+public class CacheAnalyzer {
+    public void analyze(CacheStats stats) {
+        System.out.println("\n=== Cache Performance Analysis ===");
+        
+        // Hit rate analysis
+        double hitRate = stats.hitRate();
+        if (hitRate < 0.7) {
+            System.out.println("⚠️ Low hit rate: Consider increasing cache size");
+        } else if (hitRate > 0.95) {
+            System.out.println("✓ Excellent hit rate");
+        }
+        
+        // Load time analysis
+        double avgLoadMs = stats.averageLoadPenalty() / 1_000_000.0;
+        if (avgLoadMs > 100) {
+            System.out.println("⚠️ Slow loads: Optimize data source");
+        }
+        
+        // Load failure analysis
+        if (stats.loadFailureCount() > 0) {
+            double failureRate = stats.loadFailureRate();
+            System.out.printf("⚠️ Load failures: %.2f%% (%d/%d)\n",
+                failureRate * 100,
+                stats.loadFailureCount(),
+                stats.loadCount());
+        }
+        
+        // Eviction analysis
+        if (stats.evictionCount() > 0) {
+            double evictionRatio = 
+                (double) stats.evictionCount() / stats.loadSuccessCount();
+            if (evictionRatio > 0.5) {
+                System.out.println("⚠️ High eviction rate: Increase maximum size");
+            }
+        }
+        
+        // Efficiency score
+        double efficiency = hitRate * (1 - stats.loadFailureRate());
+        System.out.printf("\nCache Efficiency Score: %.2f%%\n", efficiency * 100);
+    }
+}
+```
+
+### Custom Statistics Collector
+
+Implement custom tracking logic:
+
+```java
+public class CustomStatsCounter implements StatsCounter {
+    private final AtomicLong hits = new AtomicLong();
+    private final AtomicLong misses = new AtomicLong();
+    private final AtomicLong loadSuccesses = new AtomicLong();
+    private final AtomicLong loadFailures = new AtomicLong();
+    private final AtomicLong totalLoadTime = new AtomicLong();
+    private final AtomicLong evictions = new AtomicLong();
+    private final AtomicLong evictionWeight = new AtomicLong();
+    
+    @Override
+    public void recordHits(int count) {
+        hits.addAndGet(count);
+        // Custom logic: Send to monitoring system
+        monitoringService.recordMetric("cache.hits", count);
+    }
+    
+    @Override
+    public void recordMisses(int count) {
+        misses.addAndGet(count);
+        monitoringService.recordMetric("cache.misses", count);
+    }
+    
+    @Override
+    public void recordLoadSuccess(long loadTime) {
+        loadSuccesses.incrementAndGet();
+        totalLoadTime.addAndGet(loadTime);
+        monitoringService.recordTiming("cache.load", loadTime);
+    }
+    
+    @Override
+    public void recordLoadFailure(long loadTime) {
+        loadFailures.incrementAndGet();
+        totalLoadTime.addAndGet(loadTime);
+        monitoringService.recordMetric("cache.load.failure", 1);
+    }
+    
+    @Override
+    public void recordEviction(int weight, RemovalCause cause) {
+        evictions.incrementAndGet();
+        evictionWeight.addAndGet(weight);
+        monitoringService.recordMetric("cache.eviction", 1);
+    }
+    
+    @Override
+    public CacheStats snapshot() {
+        return CacheStats.of(
+            hits.get(),
+            misses.get(),
+            loadSuccesses.get(),
+            loadFailures.get(),
+            totalLoadTime.get(),
+            evictions.get(),
+            evictionWeight.get()
+        );
+    }
+}
+
+// Use custom stats collector
+Cache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .recordStats(() -> new CustomStatsCounter())
+    .build();
+```
+
+## Metrics Integration
+
+### Prometheus Export
+
+```java
+public class CacheMetricsExporter {
+    private final Cache<?, ?> cache;
+    private final String cacheName;
+    
+    public void export(CollectorRegistry registry) {
+        new Gauge.Builder()
+            .name(cacheName + "_hit_rate")
+            .help("Cache hit rate")
+            .register(registry)
+            .setChild(new Gauge.Child() {
+                @Override
+                public double get() {
+                    return cache.stats().hitRate();
+                }
+            });
+        
+        new Counter.Builder()
+            .name(cacheName + "_requests_total")
+            .help("Total cache requests")
+            .register(registry)
+            .inc(cache.stats().requestCount());
+    }
+}
+```
+
+### Logging Integration
+
+```java
+public class CacheStatsLogger {
+    private static final Logger logger = LoggerFactory.getLogger(CacheStatsLogger.class);
+    
+    public void logStats(String cacheName, CacheStats stats) {
+        logger.info("Cache: {} | Requests: {} | Hit Rate: {:.2%} | " +
+                   "Avg Load: {}ms | Evictions: {}",
+            cacheName,
+            stats.requestCount(),
+            stats.hitRate(),
+            stats.averageLoadPenalty() / 1_000_000.0,
+            stats.evictionCount());
+    }
+}
+```
+
+## Best Practices
+
+1. **Always enable stats for production caches:**
+   ```java
+   .recordStats()  // Minimal overhead
+   ```
+
+2. **Monitor hit rate regularly** - Target 80%+ for effective caching
+
+3. **Track deltas, not just totals** - Use `minus()` for incremental metrics
+
+4. **Set up alerts:**
+   ```java
+   if (stats.hitRate() < 0.7) {
+       alerting.sendAlert("Low cache hit rate");
+   }
+   ```
+
+5. **Analyze load times** - Optimize slow operations:
+   ```java
+   if (stats.averageLoadPenalty() > 100_000_000) { // 100ms
+       logger.warn("Slow cache loads detected");
+   }
+   ```
+
+6. **Handle overflow gracefully** - Metrics may overflow on very high-traffic caches
+
+7. **Use custom collectors for advanced needs** - Integrate with monitoring systems
+
+## Thread Safety
+
+`CacheStats` instances are immutable and thread-safe. The `cache.stats()` method returns a consistent snapshot at the time of the call.
+
+```java
+// Safe to use across threads
+CacheStats stats = cache.stats();
+CompletableFuture.supplyAsync(() -> analyze(stats));
+CompletableFuture.supplyAsync(() -> export(stats));
+```
+
+## See Also
+
+- [Policy](/api/policy) - Access policy interface
+- [StatsCounter](https://javadoc.io/doc/com.github.ben-manes.caffeine/caffeine/latest/com.github.benmanes.caffeine/com/github/benmanes/caffeine/cache/stats/StatsCounter.html) - Custom statistics collector
+- [Caffeine](/api/caffeine) - Enable stats with `recordStats()`

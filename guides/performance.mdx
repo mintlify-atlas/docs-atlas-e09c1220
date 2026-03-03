@@ -1,0 +1,652 @@
+---
+title: Performance Tuning
+description: Optimize Caffeine cache performance for your specific workload
+---
+
+Caffeine is designed for high performance out of the box, but understanding configuration options and tuning strategies can help you achieve optimal performance for your specific use case.
+
+## Performance Fundamentals
+
+<CardGroup cols={2}>
+  <Card title="Near-Optimal" icon="chart-line">
+    Caffeine achieves near-optimal hit rates with W-TinyLFU
+  </Card>
+  <Card title="Concurrent" icon="users">
+    Lock-free design for high concurrency
+  </Card>
+  <Card title="Adaptive" icon="sliders">
+    Automatically adapts to workload patterns
+  </Card>
+  <Card title="Low Overhead" icon="gauge">
+    Minimal CPU and memory overhead
+  </Card>
+</CardGroup>
+
+## Sizing Your Cache
+
+### Understanding Cache Size
+
+Proper sizing is the most important performance factor:
+
+```java
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+
+// Entry-based sizing (simple)
+Cache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000) // Maximum number of entries
+    .build();
+
+// Weight-based sizing (advanced)
+Cache<String, byte[]> dataCache = Caffeine.newBuilder()
+    .maximumWeight(100_000_000) // 100MB
+    .weigher((key, value) -> value.length)
+    .build();
+```
+
+<Tip>
+Start with monitoring your working set size (number of unique items accessed in a time window). Set cache size to 2-3x this value.
+</Tip>
+
+### Calculating Optimal Size
+
+```java
+public class CacheSizeCalculator {
+    
+    public static long calculateOptimalSize(
+            long heapSize,
+            double cachePercentage,
+            long avgEntrySize) {
+        long availableMemory = (long) (heapSize * cachePercentage);
+        return availableMemory / avgEntrySize;
+    }
+    
+    public static void main(String[] args) {
+        long heapSize = Runtime.getRuntime().maxMemory();
+        long avgEntrySize = 1024; // 1KB per entry
+        double cachePercentage = 0.25; // Use 25% of heap
+        
+        long optimalSize = calculateOptimalSize(
+            heapSize, 
+            cachePercentage, 
+            avgEntrySize
+        );
+        
+        System.out.println("Recommended cache size: " + optimalSize);
+    }
+}
+```
+
+### Dynamic Sizing
+
+```java
+public class DynamicCache<K, V> {
+    private volatile Cache<K, V> cache;
+    private final ScheduledExecutorService scheduler;
+    
+    public DynamicCache(long initialSize) {
+        this.cache = createCache(initialSize);
+        this.scheduler = Executors.newScheduledThreadPool(1);
+        
+        // Adjust size based on hit rate
+        scheduler.scheduleAtFixedRate(
+            this::adjustSize,
+            1, 1, TimeUnit.HOURS
+        );
+    }
+    
+    private void adjustSize() {
+        CacheStats stats = cache.stats();
+        double hitRate = stats.hitRate();
+        long currentSize = cache.estimatedSize();
+        
+        if (hitRate < 0.80 && currentSize < MAX_SIZE) {
+            // Increase size if hit rate is low
+            long newSize = (long) (currentSize * 1.2);
+            rebuildCache(newSize);
+        } else if (hitRate > 0.95 && currentSize > MIN_SIZE) {
+            // Decrease size if hit rate is very high
+            long newSize = (long) (currentSize * 0.8);
+            rebuildCache(newSize);
+        }
+    }
+    
+    private void rebuildCache(long newSize) {
+        Cache<K, V> oldCache = cache;
+        Cache<K, V> newCache = createCache(newSize);
+        
+        // Copy hot entries
+        newCache.putAll(oldCache.asMap());
+        cache = newCache;
+    }
+    
+    private Cache<K, V> createCache(long size) {
+        return Caffeine.newBuilder()
+            .maximumSize(size)
+            .recordStats()
+            .build();
+    }
+}
+```
+
+## Optimizing Expiration
+
+### Choosing Expiration Strategy
+
+<Tabs>
+  <Tab title="Expire After Write">
+    ```java
+    // Best for: Time-sensitive data with fixed validity
+    Cache<String, Price> priceCache = Caffeine.newBuilder()
+        .expireAfterWrite(Duration.ofMinutes(5))
+        .build();
+    
+    // Use case: Stock prices that update every 5 minutes
+    ```
+  </Tab>
+  
+  <Tab title="Expire After Access">
+    ```java
+    // Best for: Data that becomes irrelevant when not accessed
+    Cache<String, Session> sessionCache = Caffeine.newBuilder()
+        .expireAfterAccess(Duration.ofMinutes(30))
+        .build();
+    
+    // Use case: User sessions that expire after inactivity
+    ```
+  </Tab>
+  
+  <Tab title="Variable Expiration">
+    ```java
+    // Best for: Different TTLs per entry
+    Cache<String, Document> docCache = Caffeine.newBuilder()
+        .expireAfter(new Expiry<String, Document>() {
+            @Override
+            public long expireAfterCreate(
+                    String key, 
+                    Document doc, 
+                    long currentTime) {
+                return doc.getTtlNanos();
+            }
+            
+            @Override
+            public long expireAfterUpdate(
+                    String key,
+                    Document doc,
+                    long currentTime,
+                    long currentDuration) {
+                return doc.getTtlNanos();
+            }
+            
+            @Override
+            public long expireAfterRead(
+                    String key,
+                    Document doc,
+                    long currentTime,
+                    long currentDuration) {
+                return currentDuration; // No change on read
+            }
+        })
+        .build();
+    ```
+  </Tab>
+</Tabs>
+
+### Refresh vs Expire
+
+```java
+// EXPIRATION: Entry removed, next access loads fresh data
+LoadingCache<String, Data> expiringCache = Caffeine.newBuilder()
+    .expireAfterWrite(Duration.ofMinutes(5))
+    .build(key -> loadData(key));
+
+// REFRESH: Stale data returned, background refresh triggered
+LoadingCache<String, Data> refreshingCache = Caffeine.newBuilder()
+    .refreshAfterWrite(Duration.ofMinutes(5))
+    .build(key -> loadData(key));
+
+// BEST: Combine both for optimal performance
+LoadingCache<String, Data> optimalCache = Caffeine.newBuilder()
+    .expireAfterWrite(Duration.ofMinutes(10))  // Hard TTL
+    .refreshAfterWrite(Duration.ofMinutes(5))  // Soft refresh
+    .build(key -> loadData(key));
+```
+
+<Note>
+Refresh returns stale data immediately while loading fresh data asynchronously. This provides better latency than expiration.
+</Note>
+
+## Optimizing Loading
+
+### Bulk Loading Performance
+
+```java
+import java.util.concurrent.CompletableFuture;
+
+// SLOW: Individual loads
+LoadingCache<String, User> slowCache = Caffeine.newBuilder()
+    .build(key -> database.loadUser(key)); // One query per key
+
+Map<String, User> users = slowCache.getAll(userIds); // N queries!
+
+// FAST: Bulk loading
+LoadingCache<String, User> fastCache = Caffeine.newBuilder()
+    .build(new CacheLoader<String, User>() {
+        @Override
+        public User load(String key) {
+            return database.loadUser(key);
+        }
+        
+        @Override
+        public Map<String, User> loadAll(Set<? extends String> keys) {
+            // Single query for all keys
+            return database.loadUsers(keys);
+        }
+    });
+
+Map<String, User> users = fastCache.getAll(userIds); // 1 query!
+```
+
+### Async Loading for Better Throughput
+
+```java
+// Synchronous: Blocks thread during load
+LoadingCache<String, User> syncCache = Caffeine.newBuilder()
+    .build(key -> database.loadUser(key)); // Blocks thread
+
+// Asynchronous: Non-blocking, better throughput
+AsyncLoadingCache<String, User> asyncCache = Caffeine.newBuilder()
+    .buildAsync((key, executor) -> 
+        CompletableFuture.supplyAsync(
+            () -> database.loadUser(key),
+            executor
+        )
+    );
+```
+
+### Coalescing Duplicate Loads
+
+Caffeine automatically coalesces concurrent loads for the same key:
+
+```java
+LoadingCache<String, ExpensiveData> cache = Caffeine.newBuilder()
+    .build(key -> {
+        // Even if 100 threads request same key simultaneously,
+        // this function executes only once
+        return expensiveComputation(key);
+    });
+
+// All threads wait for same result
+CompletableFuture.allOf(
+    CompletableFuture.runAsync(() -> cache.get("key1")),
+    CompletableFuture.runAsync(() -> cache.get("key1")),
+    CompletableFuture.runAsync(() -> cache.get("key1"))
+).join(); // Only one load happens!
+```
+
+## Minimizing Overhead
+
+### Disable Features You Don't Need
+
+```java
+// Minimal overhead configuration
+Cache<String, String> minimalCache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    // Don't add: stats, weak keys, soft values, expiration
+    // unless you need them
+    .build();
+
+// With all features (higher overhead)
+Cache<String, String> fullCache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .recordStats()              // Adds overhead
+    .weakKeys()                 // Adds overhead
+    .softValues()               // Adds overhead
+    .expireAfterWrite(Duration.ofMinutes(5))  // Adds overhead
+    .build();
+```
+
+### Efficient Key and Value Types
+
+```java
+// INEFFICIENT: Boxing overhead
+Cache<Integer, Integer> boxedCache = Caffeine.newBuilder()
+    .maximumSize(100_000)
+    .build();
+
+// BETTER: Use primitive-friendly collections internally
+public class EfficientIntCache {
+    private final Cache<String, IntArray> cache;
+    
+    public int get(int id) {
+        IntArray array = cache.get(
+            String.valueOf(id / 1000),
+            key -> new IntArray(1000)
+        );
+        return array.get(id % 1000);
+    }
+}
+
+// EFFICIENT: Immutable, well-designed keys
+record CacheKey(String tenant, String userId) {
+    // Good: implements hashCode/equals efficiently
+    // Good: immutable
+    // Good: no unnecessary fields
+}
+```
+
+### Optimal Initial Capacity
+
+```java
+// Let Caffeine grow gradually (slower startup)
+Cache<String, String> defaultCache = Caffeine.newBuilder()
+    .maximumSize(100_000)
+    .build();
+
+// Pre-size for known capacity (faster)
+Cache<String, String> presizedCache = Caffeine.newBuilder()
+    .initialCapacity(100_000)  // Avoid resizing
+    .maximumSize(100_000)
+    .build();
+```
+
+## Executor Configuration
+
+### Custom Executor for Async Operations
+
+```java
+import java.util.concurrent.*;
+
+// Default: Uses ForkJoinPool.commonPool()
+AsyncLoadingCache<String, User> defaultAsync = 
+    Caffeine.newBuilder().buildAsync(this::loadUser);
+
+// Custom: Dedicated thread pool
+Executor customExecutor = new ThreadPoolExecutor(
+    10,              // core threads
+    50,              // max threads
+    60L,             // keepalive
+    TimeUnit.SECONDS,
+    new LinkedBlockingQueue<>(1000),
+    new ThreadPoolExecutor.CallerRunsPolicy()
+);
+
+AsyncLoadingCache<String, User> customAsync = Caffeine.newBuilder()
+    .executor(customExecutor)
+    .buildAsync(this::loadUser);
+```
+
+<Warning>
+Using `Runnable::run` as executor runs operations on the calling thread. Only use for testing or when you have a specific reason.
+</Warning>
+
+### Scheduler for Proactive Expiration
+
+```java
+import com.github.benmanes.caffeine.cache.Scheduler;
+
+// Default: Opportunistic expiration during operations
+Cache<String, String> lazyCache = Caffeine.newBuilder()
+    .expireAfterWrite(Duration.ofMinutes(5))
+    .build();
+
+// With scheduler: Proactive background expiration
+Cache<String, String> activeCache = Caffeine.newBuilder()
+    .expireAfterWrite(Duration.ofMinutes(5))
+    .scheduler(Scheduler.systemScheduler())
+    .build();
+```
+
+## Monitoring and Tuning
+
+### Essential Metrics
+
+```java
+import com.github.benmanes.caffeine.cache.stats.CacheStats;
+
+public class CacheMonitor {
+    private final Cache<String, ?> cache;
+    
+    public void logMetrics() {
+        CacheStats stats = cache.stats();
+        
+        System.out.println("Cache Metrics:");
+        System.out.println("  Hit Rate: " + 
+            String.format("%.2f%%", stats.hitRate() * 100));
+        System.out.println("  Miss Rate: " + 
+            String.format("%.2f%%", stats.missRate() * 100));
+        System.out.println("  Load Count: " + stats.loadCount());
+        System.out.println("  Eviction Count: " + stats.evictionCount());
+        System.out.println("  Average Load Time: " + 
+            stats.averageLoadPenalty() / 1_000_000 + "ms");
+        
+        // Size metrics
+        System.out.println("  Estimated Size: " + cache.estimatedSize());
+    }
+    
+    public boolean needsTuning() {
+        CacheStats stats = cache.stats();
+        
+        // Low hit rate indicates cache too small or bad access pattern
+        if (stats.hitRate() < 0.80) {
+            System.out.println("WARNING: Low hit rate. Consider increasing size.");
+            return true;
+        }
+        
+        // High average load time indicates slow loading
+        if (stats.averageLoadPenalty() > 100_000_000) { // 100ms
+            System.out.println("WARNING: Slow loads. Optimize loading logic.");
+            return true;
+        }
+        
+        return false;
+    }
+}
+```
+
+### Integration with Monitoring Systems
+
+```java
+// Micrometer integration
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.binder.cache.CaffeineCacheMetrics;
+
+public class MonitoredCache<K, V> {
+    private final Cache<K, V> cache;
+    
+    public MonitoredCache(MeterRegistry registry, String cacheName) {
+        this.cache = Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .recordStats()
+            .build();
+        
+        // Register with Micrometer
+        CaffeineCacheMetrics.monitor(registry, cache, cacheName);
+    }
+}
+
+// Prometheus/Grafana
+public class PrometheusMetrics {
+    public void exportMetrics(Cache<?, ?> cache) {
+        CacheStats stats = cache.stats();
+        
+        // Export to Prometheus
+        prometheusRegistry.gauge(
+            "cache_hit_rate", 
+            stats.hitRate()
+        );
+        prometheusRegistry.counter(
+            "cache_evictions_total",
+            stats.evictionCount()
+        );
+    }
+}
+```
+
+## Common Performance Issues
+
+<AccordionGroup>
+  <Accordion title="Low Hit Rate">
+    **Symptoms:** High miss rate, frequent loads
+    
+    **Solutions:**
+    - Increase cache size
+    - Analyze access patterns - are keys truly reused?
+    - Consider warming up cache at startup
+    - Check if data changes too frequently
+    
+    ```java
+    // Add cache warmup
+    public void warmUpCache(LoadingCache<String, User> cache) {
+        Set<String> hotKeys = getHotKeys(); // Top accessed keys
+        cache.getAll(hotKeys);
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Slow Load Times">
+    **Symptoms:** High average load penalty
+    
+    **Solutions:**
+    - Implement bulk loading
+    - Use async loading
+    - Optimize database queries
+    - Add connection pooling
+    - Use refresh instead of expire
+    
+    ```java
+    // Use refresh for better latency
+    LoadingCache<String, User> cache = Caffeine.newBuilder()
+        .refreshAfterWrite(Duration.ofMinutes(5))
+        .build(key -> optimizedLoad(key));
+    ```
+  </Accordion>
+  
+  <Accordion title="High Memory Usage">
+    **Symptoms:** OutOfMemoryError, frequent GC
+    
+    **Solutions:**
+    - Reduce maximum size
+    - Use weigher for better size control
+    - Consider soft/weak references
+    - Profile memory to find large objects
+    
+    ```java
+    // Better memory control with weigher
+    Cache<String, byte[]> cache = Caffeine.newBuilder()
+        .maximumWeight(100_000_000) // 100MB
+        .weigher((key, value) -> value.length + key.length())
+        .build();
+    ```
+  </Accordion>
+  
+  <Accordion title="Excessive Evictions">
+    **Symptoms:** High eviction count, churn
+    
+    **Solutions:**
+    - Increase cache size
+    - Review access patterns
+    - Check if expiration is too aggressive
+    - Monitor eviction listeners
+    
+    ```java
+    // Track eviction causes
+    Cache<String, String> cache = Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .evictionListener((key, value, cause) -> {
+            metrics.recordEviction(cause);
+        })
+        .build();
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Performance Benchmarking
+
+```java
+import org.openjdk.jmh.annotations.*;
+
+@State(Scope.Thread)
+@BenchmarkMode(Mode.Throughput)
+@OutputTimeUnit(TimeUnit.SECONDS)
+public class CacheBenchmark {
+    
+    private Cache<Integer, String> cache;
+    private Random random;
+    
+    @Setup
+    public void setup() {
+        cache = Caffeine.newBuilder()
+            .maximumSize(1000)
+            .build();
+        random = new Random();
+        
+        // Pre-populate
+        for (int i = 0; i < 1000; i++) {
+            cache.put(i, "value" + i);
+        }
+    }
+    
+    @Benchmark
+    public String readHeavy() {
+        int key = random.nextInt(1000);
+        return cache.getIfPresent(key);
+    }
+    
+    @Benchmark
+    public void writeHeavy() {
+        int key = random.nextInt(1000);
+        cache.put(key, "value" + key);
+    }
+    
+    @Benchmark
+    public String mixed() {
+        int key = random.nextInt(1000);
+        if (random.nextInt(10) < 8) {
+            return cache.getIfPresent(key);
+        } else {
+            cache.put(key, "value" + key);
+            return null;
+        }
+    }
+}
+```
+
+## Best Practices Summary
+
+<Steps>
+  <Step title="Start with Monitoring">
+    Enable statistics and monitor hit rate, load time, and evictions before optimizing.
+  </Step>
+  
+  <Step title="Size Appropriately">
+    Set cache size based on working set size, not total data size. Monitor and adjust.
+  </Step>
+  
+  <Step title="Optimize Loading">
+    Implement bulk loading and use async operations for better throughput.
+  </Step>
+  
+  <Step title="Choose Right Expiration">
+    Use refresh for better latency, expire for hard TTLs. Combine both when appropriate.
+  </Step>
+  
+  <Step title="Minimize Overhead">
+    Only enable features you need. Every feature adds some overhead.
+  </Step>
+  
+  <Step title="Test Under Load">
+    Benchmark with realistic workloads before deploying to production.
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Testing Caches" icon="flask" href="/guides/testing">
+    Learn how to test cache performance
+  </Card>
+  <Card title="Cache Types" icon="box" href="/guides/cache-types">
+    Choose the right cache type for your needs
+  </Card>
+</CardGroup>

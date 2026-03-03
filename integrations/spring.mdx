@@ -1,0 +1,569 @@
+---
+title: Spring Framework Integration
+description: Use Caffeine as a caching backend for Spring's Cache abstraction
+---
+
+Caffeine integrates seamlessly with Spring Framework's caching abstraction, providing high-performance caching for Spring applications.
+
+## Installation
+
+Add Caffeine and Spring's cache support to your project:
+
+<CodeGroup>
+```gradle Gradle
+implementation 'com.github.ben-manes.caffeine:caffeine:3.2.3'
+implementation 'org.springframework.boot:spring-boot-starter-cache'
+```
+
+```maven Maven
+<dependency>
+  <groupId>com.github.ben-manes.caffeine</groupId>
+  <artifactId>caffeine</artifactId>
+  <version>3.2.3</version>
+</dependency>
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-starter-cache</artifactId>
+</dependency>
+```
+</CodeGroup>
+
+<Note>
+  Spring Boot 2.0+ provides native support for Caffeine as a cache provider.
+</Note>
+
+## Configuration
+
+### Spring Boot Auto-Configuration
+
+Spring Boot automatically configures Caffeine when it's on the classpath:
+
+<CodeGroup>
+```java Application.java
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cache.annotation.EnableCaching;
+
+@SpringBootApplication
+@EnableCaching
+public class Application {
+    public static void main(String[] args) {
+        SpringApplication.run(Application.class, args);
+    }
+}
+```
+
+```yaml application.yml
+spring:
+  cache:
+    type: caffeine
+    caffeine:
+      spec: maximumSize=500,expireAfterWrite=5m
+    cache-names:
+      - users
+      - products
+      - orders
+```
+
+```properties application.properties
+spring.cache.type=caffeine
+spring.cache.caffeine.spec=maximumSize=500,expireAfterWrite=5m
+spring.cache.cache-names=users,products,orders
+```
+</CodeGroup>
+
+<Steps>
+  <Step title="Enable Caching">
+    Add `@EnableCaching` to your main application class or configuration class.
+  </Step>
+  
+  <Step title="Configure Cache Spec">
+    Define cache behavior using the `spring.cache.caffeine.spec` property.
+  </Step>
+  
+  <Step title="Declare Cache Names">
+    List cache names in `spring.cache.cache-names` for pre-creation.
+  </Step>
+</Steps>
+
+### Programmatic Configuration
+
+For more control, define cache managers programmatically:
+
+```java
+import com.github.benmanes.caffeine.cache.Caffeine;
+import org.springframework.cache.CacheManager;
+import org.springframework.cache.annotation.EnableCaching;
+import org.springframework.cache.caffeine.CaffeineCacheManager;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import java.time.Duration;
+
+@Configuration
+@EnableCaching
+public class CacheConfig {
+    
+    @Bean
+    public CacheManager cacheManager() {
+        CaffeineCacheManager cacheManager = new CaffeineCacheManager(
+            "users", "products", "orders"
+        );
+        
+        cacheManager.setCaffeine(Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .expireAfterWrite(Duration.ofMinutes(5))
+            .recordStats()
+        );
+        
+        return cacheManager;
+    }
+}
+```
+
+### Multiple Cache Configurations
+
+Define different configurations for different caches:
+
+```java
+import com.github.benmanes.caffeine.cache.Caffeine;
+import org.springframework.cache.CacheManager;
+import org.springframework.cache.annotation.EnableCaching;
+import org.springframework.cache.support.SimpleCacheManager;
+import org.springframework.cache.caffeine.CaffeineCache;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import java.time.Duration;
+import java.util.Arrays;
+
+@Configuration
+@EnableCaching
+public class CacheConfig {
+    
+    @Bean
+    public CacheManager cacheManager() {
+        SimpleCacheManager cacheManager = new SimpleCacheManager();
+        
+        cacheManager.setCaches(Arrays.asList(
+            // Short-lived cache for users
+            new CaffeineCache("users",
+                Caffeine.newBuilder()
+                    .maximumSize(1000)
+                    .expireAfterWrite(Duration.ofMinutes(5))
+                    .build()),
+            
+            // Long-lived cache for products
+            new CaffeineCache("products",
+                Caffeine.newBuilder()
+                    .maximumSize(10_000)
+                    .expireAfterWrite(Duration.ofHours(1))
+                    .build()),
+            
+            // Small cache with access-based expiration
+            new CaffeineCache("sessions",
+                Caffeine.newBuilder()
+                    .maximumSize(500)
+                    .expireAfterAccess(Duration.ofMinutes(30))
+                    .build())
+        ));
+        
+        return cacheManager;
+    }
+}
+```
+
+## Using Cache Annotations
+
+### @Cacheable
+
+Cache method results:
+
+```java
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.stereotype.Service;
+
+@Service
+public class UserService {
+    
+    @Cacheable("users")
+    public User findById(Long id) {
+        // This method is only called on cache miss
+        return database.findUser(id);
+    }
+    
+    @Cacheable(value = "users", key = "#email")
+    public User findByEmail(String email) {
+        return database.findUserByEmail(email);
+    }
+    
+    @Cacheable(value = "users", condition = "#id > 1000")
+    public User findByIdConditional(Long id) {
+        // Only cached if id > 1000
+        return database.findUser(id);
+    }
+    
+    @Cacheable(value = "users", unless = "#result == null")
+    public User findByIdUnlessNull(Long id) {
+        // Don't cache null results
+        return database.findUser(id);
+    }
+}
+```
+
+### @CachePut
+
+Update the cache without skipping method execution:
+
+```java
+import org.springframework.cache.annotation.CachePut;
+
+@Service
+public class UserService {
+    
+    @CachePut(value = "users", key = "#user.id")
+    public User updateUser(User user) {
+        User updated = database.save(user);
+        return updated; // Result is cached
+    }
+    
+    @CachePut(value = "users", key = "#result.id")
+    public User createUser(User user) {
+        return database.save(user);
+    }
+}
+```
+
+### @CacheEvict
+
+Remove entries from the cache:
+
+```java
+import org.springframework.cache.annotation.CacheEvict;
+
+@Service
+public class UserService {
+    
+    @CacheEvict(value = "users", key = "#id")
+    public void deleteUser(Long id) {
+        database.deleteUser(id);
+    }
+    
+    @CacheEvict(value = "users", allEntries = true)
+    public void deleteAllUsers() {
+        database.deleteAllUsers();
+    }
+    
+    @CacheEvict(value = "users", key = "#id", beforeInvocation = true)
+    public void deleteUserBeforeInvocation(Long id) {
+        // Evict even if method throws exception
+        database.deleteUser(id);
+    }
+}
+```
+
+### @Caching
+
+Combine multiple cache operations:
+
+```java
+import org.springframework.cache.annotation.Caching;
+
+@Service
+public class UserService {
+    
+    @Caching(
+        put = {
+            @CachePut(value = "users", key = "#result.id"),
+            @CachePut(value = "users", key = "#result.email")
+        },
+        evict = {
+            @CacheEvict(value = "userStats", allEntries = true)
+        }
+    )
+    public User updateUserProfile(Long id, ProfileUpdate update) {
+        return database.updateProfile(id, update);
+    }
+}
+```
+
+### Custom Key Generation
+
+Implement custom key generators:
+
+```java
+import org.springframework.cache.interceptor.KeyGenerator;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import java.lang.reflect.Method;
+
+@Configuration
+public class CacheConfig {
+    
+    @Bean("customKeyGenerator")
+    public KeyGenerator keyGenerator() {
+        return new KeyGenerator() {
+            @Override
+            public Object generate(Object target, Method method, Object... params) {
+                return method.getName() + "_" + 
+                       Arrays.stream(params)
+                           .map(Object::toString)
+                           .collect(Collectors.joining("_"));
+            }
+        };
+    }
+}
+
+@Service
+public class UserService {
+    @Cacheable(value = "users", keyGenerator = "customKeyGenerator")
+    public User complexLookup(String name, String department, Integer level) {
+        return database.findUser(name, department, level);
+    }
+}
+```
+
+## Loading Cache
+
+Use Caffeine's `LoadingCache` directly in Spring:
+
+```java
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.LoadingCache;
+import org.springframework.stereotype.Service;
+import java.time.Duration;
+
+@Service
+public class ProductService {
+    
+    private final LoadingCache<Long, Product> productCache;
+    
+    public ProductService(ProductRepository repository) {
+        this.productCache = Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .expireAfterWrite(Duration.ofMinutes(10))
+            .refreshAfterWrite(Duration.ofMinutes(1))
+            .recordStats()
+            .build(id -> repository.findById(id).orElse(null));
+    }
+    
+    public Product getProduct(Long id) {
+        return productCache.get(id);
+    }
+    
+    public void invalidateProduct(Long id) {
+        productCache.invalidate(id);
+    }
+    
+    public void refreshProduct(Long id) {
+        productCache.refresh(id);
+    }
+}
+```
+
+## Async Cache
+
+Use asynchronous caching for non-blocking operations:
+
+```java
+import com.github.benmanes.caffeine.cache.AsyncLoadingCache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import org.springframework.stereotype.Service;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+
+@Service
+public class ApiService {
+    
+    private final AsyncLoadingCache<String, ApiResponse> cache;
+    
+    public ApiService(HttpClient httpClient, Executor executor) {
+        this.cache = Caffeine.newBuilder()
+            .maximumSize(1000)
+            .expireAfterWrite(Duration.ofMinutes(5))
+            .buildAsync((key, exec) -> CompletableFuture.supplyAsync(
+                () -> httpClient.fetch(key), exec));
+    }
+    
+    public CompletableFuture<ApiResponse> getResponse(String endpoint) {
+        return cache.get(endpoint);
+    }
+}
+```
+
+## Cache Statistics
+
+Monitor cache performance:
+
+```java
+import com.github.benmanes.caffeine.cache.stats.CacheStats;
+import org.springframework.cache.CacheManager;
+import org.springframework.cache.caffeine.CaffeineCache;
+import org.springframework.stereotype.Service;
+
+@Service
+public class CacheMonitoringService {
+    
+    private final CacheManager cacheManager;
+    
+    public CacheMonitoringService(CacheManager cacheManager) {
+        this.cacheManager = cacheManager;
+    }
+    
+    public CacheStats getStats(String cacheName) {
+        CaffeineCache cache = (CaffeineCache) cacheManager.getCache(cacheName);
+        return cache.getNativeCache().stats();
+    }
+    
+    public void printStats(String cacheName) {
+        CacheStats stats = getStats(cacheName);
+        System.out.println("Cache: " + cacheName);
+        System.out.println("Hit count: " + stats.hitCount());
+        System.out.println("Miss count: " + stats.missCount());
+        System.out.println("Hit rate: " + stats.hitRate());
+        System.out.println("Eviction count: " + stats.evictionCount());
+        System.out.println("Load time: " + stats.averageLoadPenalty() + "ns");
+    }
+}
+```
+
+## JMX Monitoring
+
+Expose cache statistics via JMX:
+
+```java
+import com.github.benmanes.caffeine.cache.Cache;
+import org.springframework.jmx.export.annotation.ManagedAttribute;
+import org.springframework.jmx.export.annotation.ManagedResource;
+import org.springframework.stereotype.Component;
+
+@Component
+@ManagedResource(objectName = "com.example:type=Cache,name=UserCache")
+public class UserCacheJmxBean {
+    
+    private final Cache<Long, User> cache;
+    
+    public UserCacheJmxBean(Cache<Long, User> cache) {
+        this.cache = cache;
+    }
+    
+    @ManagedAttribute
+    public long getSize() {
+        return cache.estimatedSize();
+    }
+    
+    @ManagedAttribute
+    public double getHitRate() {
+        return cache.stats().hitRate();
+    }
+    
+    @ManagedAttribute
+    public long getHitCount() {
+        return cache.stats().hitCount();
+    }
+    
+    @ManagedAttribute
+    public long getMissCount() {
+        return cache.stats().missCount();
+    }
+}
+```
+
+## Common Patterns
+
+### Repository Caching
+
+```java
+@Repository
+public class UserRepository {
+    
+    @Cacheable(value = "users", key = "#id")
+    public User findById(Long id) {
+        return entityManager.find(User.class, id);
+    }
+    
+    @CachePut(value = "users", key = "#user.id")
+    public User save(User user) {
+        return entityManager.merge(user);
+    }
+    
+    @CacheEvict(value = "users", key = "#id")
+    public void deleteById(Long id) {
+        User user = entityManager.find(User.class, id);
+        if (user != null) {
+            entityManager.remove(user);
+        }
+    }
+}
+```
+
+### REST API Caching
+
+```java
+@RestController
+@RequestMapping("/api/products")
+public class ProductController {
+    
+    private final ProductService productService;
+    
+    @GetMapping("/{id}")
+    @Cacheable("products")
+    public ResponseEntity<Product> getProduct(@PathVariable Long id) {
+        return ResponseEntity.ok(productService.findById(id));
+    }
+    
+    @PutMapping("/{id}")
+    @CachePut(value = "products", key = "#id")
+    public ResponseEntity<Product> updateProduct(
+            @PathVariable Long id,
+            @RequestBody Product product) {
+        return ResponseEntity.ok(productService.update(id, product));
+    }
+    
+    @DeleteMapping("/{id}")
+    @CacheEvict(value = "products", key = "#id")
+    public ResponseEntity<Void> deleteProduct(@PathVariable Long id) {
+        productService.delete(id);
+        return ResponseEntity.noContent().build();
+    }
+}
+```
+
+### Scheduled Cache Refresh
+
+```java
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.cache.CacheManager;
+
+@Service
+public class CacheRefreshService {
+    
+    private final CacheManager cacheManager;
+    private final DataService dataService;
+    
+    @Scheduled(fixedRate = 300000) // Every 5 minutes
+    public void refreshCache() {
+        Cache cache = cacheManager.getCache("products");
+        if (cache != null) {
+            cache.clear();
+        }
+        
+        // Preload hot data
+        dataService.getPopularProducts().forEach(product -> 
+            cache.put(product.getId(), product)
+        );
+    }
+}
+```
+
+<Note>
+  Spring's cache abstraction provides a clean separation between your application logic and caching concerns, making it easy to change cache implementations.
+</Note>
+
+## Best Practices
+
+1. **Use appropriate cache names** - Group related data in named caches
+2. **Configure expiration** - Set reasonable TTL values to balance performance and freshness
+3. **Monitor cache stats** - Track hit rates and adjust configuration as needed
+4. **Handle null results** - Use `unless` to avoid caching nulls
+5. **Consider concurrency** - Caffeine handles concurrent access efficiently
+6. **Use conditional caching** - Apply `condition` for selective caching
+7. **Implement proper key strategies** - Ensure unique and consistent cache keys

@@ -1,0 +1,252 @@
+---
+title: Population
+description: Learn how to populate the cache with entries using manual, loading, and asynchronous strategies
+---
+
+Caffeine provides multiple strategies for loading entries into the cache, from manual insertion to automatic loading with custom logic.
+
+## Manual population
+
+Manual caches require explicit insertion and provide the most control over cache population.
+
+### Basic operations
+
+```java
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+
+Cache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .build();
+
+// Insert a value
+cache.put("user123", user);
+
+// Retrieve a value
+User user = cache.getIfPresent("user123");
+
+// Retrieve or compute
+User user = cache.get("user123", key -> database.loadUser(key));
+```
+
+<Note>
+The `get(key, mappingFunction)` method is atomic and ensures the mapping function is called at most once per key.
+</Note>
+
+### Bulk operations
+
+Populate multiple entries efficiently:
+
+```java
+import java.util.Map;
+import java.util.Set;
+
+// Insert multiple entries
+Map<String, User> users = Map.of(
+    "user1", user1,
+    "user2", user2,
+    "user3", user3
+);
+cache.putAll(users);
+
+// Retrieve multiple entries (only present ones)
+Set<String> keys = Set.of("user1", "user2", "user3");
+Map<String, User> present = cache.getAllPresent(keys);
+
+// Retrieve or compute multiple entries
+Map<String, User> all = cache.getAll(keys, keysToLoad -> 
+    database.loadUsers(keysToLoad)
+);
+```
+
+<Warning>
+The mapping function in `get()` and `getAll()` must not attempt to update any other mappings in the cache, as this can cause deadlock.
+</Warning>
+
+## Loading cache
+
+Loading caches automatically populate entries using a `CacheLoader` when keys are not present.
+
+### Basic loader
+
+```java
+import com.github.benmanes.caffeine.cache.CacheLoader;
+import com.github.benmanes.caffeine.cache.LoadingCache;
+
+LoadingCache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .build(key -> database.loadUser(key));
+
+// Automatically loads if absent
+User user = cache.get("user123");
+
+// Bulk load
+Map<String, User> users = cache.getAll(Set.of("user1", "user2", "user3"));
+```
+
+Reference: Cache.java:83, LoadingCache.java:69
+
+### Custom cache loader
+
+Implement `CacheLoader` for more control:
+
+```java
+CacheLoader<String, User> loader = new CacheLoader<>() {
+    @Override
+    public User load(String key) throws Exception {
+        return database.loadUser(key);
+    }
+    
+    @Override
+    public Map<String, User> loadAll(Set<? extends String> keys) throws Exception {
+        return database.loadUsers(keys);
+    }
+};
+
+LoadingCache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .build(loader);
+```
+
+<Note>
+Override `loadAll()` when bulk retrieval is more efficient than individual lookups. If not overridden, it delegates to individual `load()` calls.
+</Note>
+
+Reference: CacheLoader.java:90
+
+### Bulk loader
+
+Create a loader optimized for bulk operations:
+
+```java
+import com.github.benmanes.caffeine.cache.CacheLoader;
+
+CacheLoader<String, User> bulkLoader = CacheLoader.bulk(
+    keys -> database.loadUsers(keys)
+);
+
+LoadingCache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .build(bulkLoader);
+```
+
+Reference: CacheLoader.java:235
+
+## Asynchronous loading
+
+Async caches return `CompletableFuture` instances for non-blocking operations.
+
+### Async cache
+
+```java
+import com.github.benmanes.caffeine.cache.AsyncCache;
+import java.util.concurrent.CompletableFuture;
+
+AsyncCache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .buildAsync();
+
+// Non-blocking retrieval
+CompletableFuture<User> future = cache.get("user123", 
+    (key, executor) -> CompletableFuture.supplyAsync(
+        () -> database.loadUser(key), 
+        executor
+    )
+);
+
+future.thenAccept(user -> System.out.println(user.getName()));
+```
+
+### Async loading cache
+
+```java
+import com.github.benmanes.caffeine.cache.AsyncLoadingCache;
+import java.util.concurrent.Executor;
+
+AsyncLoadingCache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .buildAsync((key, executor) -> 
+        CompletableFuture.supplyAsync(
+            () -> database.loadUser(key),
+            executor
+        )
+    );
+
+CompletableFuture<User> future = cache.get("user123");
+```
+
+<Note>
+By default, async operations use `ForkJoinPool.commonPool()`. Configure a custom executor with `Caffeine.executor(Executor)`.
+</Note>
+
+Reference: Caffeine.java:347
+
+## Synchronous view
+
+Access async caches synchronously when needed:
+
+```java
+AsyncLoadingCache<String, User> asyncCache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .buildAsync(key -> CompletableFuture.supplyAsync(
+        () -> database.loadUser(key)
+    ));
+
+// Get synchronous view
+LoadingCache<String, User> syncCache = asyncCache.synchronous();
+
+// Blocking operations
+User user = syncCache.get("user123");
+```
+
+## Map view
+
+Access the cache as a `ConcurrentMap`:
+
+```java
+Cache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .build();
+
+ConcurrentMap<String, User> map = cache.asMap();
+
+// Standard Map operations
+map.putIfAbsent("user123", user);
+map.computeIfAbsent("user456", key -> database.loadUser(key));
+map.merge("user789", user, (old, new) -> new);
+```
+
+Reference: Cache.java:215
+
+<Warning>
+Computation operations like `compute()` and `merge()` must not attempt to update other mappings in the cache to avoid deadlock.
+</Warning>
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Choose the right cache type">
+    - Use **manual cache** when you control when values are loaded
+    - Use **loading cache** for automatic, consistent loading behavior
+    - Use **async cache** for non-blocking I/O operations
+  </Accordion>
+
+  <Accordion title="Implement efficient loaders">
+    - Override `loadAll()` for bulk operations when possible
+    - Keep loader functions short and simple
+    - Handle exceptions appropriately (they propagate as `CompletionException`)
+    - Never update other cache mappings from within a loader
+  </Accordion>
+
+  <Accordion title="Handle null values">
+    - Null values are not stored in the cache
+    - `getIfPresent()` returns null for both missing and null values
+    - Declare nullable value types if your loader may return null
+  </Accordion>
+</AccordionGroup>
+
+## Related topics
+
+- [Eviction](/core/eviction) - Control when entries are removed
+- [Expiration](/core/expiration) - Set time-based entry lifetimes
+- [Refresh](/core/refresh) - Reload entries asynchronously

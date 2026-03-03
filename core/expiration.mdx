@@ -1,0 +1,383 @@
+---
+title: Expiration
+description: Configure time-based expiration policies to automatically remove stale entries
+---
+
+Caffeine supports multiple time-based expiration strategies to automatically remove stale entries from the cache.
+
+## Fixed expiration
+
+Remove entries after a fixed duration has elapsed.
+
+### Expire after write
+
+Remove entries after a fixed time since creation or last update:
+
+```java
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import java.time.Duration;
+
+Cache<String, Session> cache = Caffeine.newBuilder()
+    .expireAfterWrite(Duration.ofMinutes(30))
+    .build();
+```
+
+You can also specify duration with time units:
+
+```java
+import java.util.concurrent.TimeUnit;
+
+Cache<String, Session> cache = Caffeine.newBuilder()
+    .expireAfterWrite(30, TimeUnit.MINUTES)
+    .build();
+```
+
+Reference: Caffeine.java:647, Caffeine.java:672
+
+<Note>
+The expiration timer resets whenever an entry is updated via `put()`, `putAll()`, or `Cache.asMap().put()`.
+</Note>
+
+### Expire after access
+
+Remove entries after a fixed time since last read or write:
+
+```java
+Cache<String, Session> cache = Caffeine.newBuilder()
+    .expireAfterAccess(Duration.ofMinutes(30))
+    .build();
+```
+
+Access time is reset by:
+- All cache read operations: `get()`, `getIfPresent()`, `getAll()`, `getAllPresent()`
+- All cache write operations: `put()`, `putAll()`
+- Map operations: `Cache.asMap().get()`, `Cache.asMap().put()`
+
+<Warning>
+Operations on the collection views of `asMap()` (like iterating over `keySet()`) do NOT reset access time.
+</Warning>
+
+Reference: Caffeine.java:709, Caffeine.java:737
+
+## Variable expiration
+
+Calculate expiration time individually for each entry using an `Expiry` policy.
+
+### Custom expiry
+
+Implement `Expiry` for complete control:
+
+```java
+import com.github.benmanes.caffeine.cache.Expiry;
+
+Expiry<String, Session> expiry = new Expiry<>() {
+    @Override
+    public long expireAfterCreate(String key, Session session, long currentTime) {
+        // Expire based on session type
+        return session.isGuest() 
+            ? TimeUnit.MINUTES.toNanos(5)
+            : TimeUnit.HOURS.toNanos(1);
+    }
+    
+    @Override
+    public long expireAfterUpdate(String key, Session session, 
+                                  long currentTime, long currentDuration) {
+        // Reset expiration on update
+        return currentTime + TimeUnit.MINUTES.toNanos(30);
+    }
+    
+    @Override
+    public long expireAfterRead(String key, Session session,
+                                long currentTime, long currentDuration) {
+        // Keep current expiration, don't reset on read
+        return currentDuration;
+    }
+};
+
+Cache<String, Session> cache = Caffeine.newBuilder()
+    .expireAfter(expiry)
+    .build();
+```
+
+Reference: Expiry.java:58, Expiry.java:76, Expiry.java:94
+
+<Warning>
+`expireAfter()` is mutually exclusive with `expireAfterAccess()` and `expireAfterWrite()`.
+</Warning>
+
+### Expire on creation
+
+Set expiration only when entries are created:
+
+```java
+import com.github.benmanes.caffeine.cache.Expiry;
+
+Expiry<String, Document> expiry = Expiry.creating((key, document) -> 
+    Duration.ofHours(document.getTTL())
+);
+
+Cache<String, Document> cache = Caffeine.newBuilder()
+    .expireAfter(expiry)
+    .build();
+```
+
+This policy does not reset expiration on update or read.
+
+Reference: Expiry.java:108
+
+### Expire on write
+
+Reset expiration when entries are created or updated:
+
+```java
+Expiry<String, Document> expiry = Expiry.writing((key, document) -> 
+    Duration.ofHours(document.getTTL())
+);
+
+Cache<String, Document> cache = Caffeine.newBuilder()
+    .expireAfter(expiry)
+    .build();
+```
+
+This policy does not reset expiration on read.
+
+Reference: Expiry.java:124
+
+### Expire on access
+
+Reset expiration on any read or write:
+
+```java
+Expiry<String, Session> expiry = Expiry.accessing((key, session) -> 
+    Duration.ofMinutes(session.getIdleTimeout())
+);
+
+Cache<String, Session> cache = Caffeine.newBuilder()
+    .expireAfter(expiry)
+    .build();
+```
+
+Reference: Expiry.java:140
+
+## Expiration policy operations
+
+Inspect and modify expiration settings at runtime.
+
+### Fixed expiration policy
+
+Access fixed expiration policies:
+
+```java
+Cache<String, Session> cache = Caffeine.newBuilder()
+    .expireAfterWrite(Duration.ofMinutes(30))
+    .build();
+
+cache.policy().expireAfterWrite().ifPresent(expiration -> {
+    // Get current expiration duration
+    Duration duration = expiration.getExpiresAfter();
+    
+    // Change expiration at runtime
+    expiration.setExpiresAfter(Duration.ofMinutes(45));
+    
+    // Get entry age
+    expiration.ageOf("session123").ifPresent(age -> 
+        System.out.println("Age: " + age)
+    );
+});
+```
+
+Reference: Policy.java:398, Policy.java:421
+
+Similarly for `expireAfterAccess()`:
+
+```java
+cache.policy().expireAfterAccess().ifPresent(expiration -> {
+    expiration.setExpiresAfter(Duration.ofMinutes(15));
+});
+```
+
+Reference: Policy.java:113
+
+### Variable expiration policy
+
+Control per-entry expiration:
+
+```java
+Cache<String, Document> cache = Caffeine.newBuilder()
+    .expireAfter(Expiry.creating((k, v) -> Duration.ofHours(1)))
+    .build();
+
+cache.policy().expireVariably().ifPresent(expiration -> {
+    // Get expiration time for specific entry
+    expiration.getExpiresAfter("doc123").ifPresent(duration ->
+        System.out.println("Expires in: " + duration)
+    );
+    
+    // Change expiration for specific entry
+    expiration.setExpiresAfter("doc123", Duration.ofHours(2));
+    
+    // Put with custom expiration
+    expiration.put("doc456", document, Duration.ofMinutes(30));
+    
+    // Put if absent with custom expiration
+    expiration.putIfAbsent("doc789", document, Duration.ofMinutes(30));
+});
+```
+
+Reference: Policy.java:542, Policy.java:571, Policy.java:637
+
+### Expiration order inspection
+
+View entries by expiration order:
+
+```java
+import java.util.Map;
+
+cache.policy().expireAfterWrite().ifPresent(expiration -> {
+    // Get oldest entries (most likely to expire soon)
+    Map<String, Session> oldest = expiration.oldest(100);
+    
+    // Get youngest entries (least likely to expire soon)
+    Map<String, Session> youngest = expiration.youngest(100);
+});
+```
+
+Reference: Policy.java:450, Policy.java:494
+
+## Scheduled expiration
+
+Configure prompt removal of expired entries using a scheduler.
+
+### System scheduler
+
+```java
+import com.github.benmanes.caffeine.cache.Scheduler;
+
+Cache<String, Session> cache = Caffeine.newBuilder()
+    .expireAfterWrite(Duration.ofMinutes(30))
+    .scheduler(Scheduler.systemScheduler())
+    .build();
+```
+
+The system scheduler uses a shared, system-wide scheduled thread pool to remove expired entries promptly.
+
+Reference: Caffeine.java:390
+
+### Custom scheduler
+
+```java
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+
+ScheduledExecutorService executor = 
+    Executors.newScheduledThreadPool(1);
+
+Scheduler scheduler = (executor, task, delay, unit) -> {
+    return executor.schedule(task, delay, unit);
+};
+
+Cache<String, Session> cache = Caffeine.newBuilder()
+    .expireAfterAccess(Duration.ofMinutes(15))
+    .scheduler(scheduler)
+    .executor(executor)
+    .build();
+```
+
+<Note>
+The scheduler provides best-effort removal. The minimum delay between executions is ~1 second (2^30 nanoseconds). Without a scheduler, expired entries are removed during cache maintenance.
+</Note>
+
+## Expiration behavior
+
+Understand how expiration interacts with cache operations.
+
+### Visibility
+
+Expired entries:
+- May be counted in `estimatedSize()` until maintenance runs
+- Are never visible to read operations
+- Are never visible to write operations
+- Are removed during periodic maintenance
+
+```java
+// Expired entries return null
+Session session = cache.getIfPresent("expired-key"); // null
+
+// Force maintenance to remove expired entries
+cache.cleanUp();
+long size = cache.estimatedSize(); // May decrease after cleanUp
+```
+
+Reference: Caffeine.java:104
+
+### Ticker
+
+Customize the time source for testing:
+
+```java
+import com.github.benmanes.caffeine.cache.Ticker;
+
+class FakeTicker implements Ticker {
+    private long nanos = 0;
+    
+    public void advance(Duration duration) {
+        nanos += duration.toNanos();
+    }
+    
+    @Override
+    public long read() {
+        return nanos;
+    }
+}
+
+FakeTicker ticker = new FakeTicker();
+
+Cache<String, String> cache = Caffeine.newBuilder()
+    .expireAfterWrite(Duration.ofMinutes(30))
+    .ticker(ticker)
+    .build();
+
+cache.put("key", "value");
+ticker.advance(Duration.ofMinutes(31));
+cache.cleanUp();
+assertNull(cache.getIfPresent("key"));
+```
+
+Reference: Caffeine.java:888
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Choose the right expiration policy">
+    - Use **expire after write** for data with a fixed freshness period (e.g., auth tokens)
+    - Use **expire after access** for data that becomes stale when unused (e.g., sessions)
+    - Use **variable expiration** when entries have different lifetimes based on their content
+  </Accordion>
+
+  <Accordion title="Optimize expiration duration">
+    - Balance freshness requirements against backend load
+    - Use shorter durations for high-churn data
+    - Consider combining with refresh for better availability
+    - Monitor `missCount` to detect if expiration is too aggressive
+  </Accordion>
+
+  <Accordion title="Handle expiration timing">
+    - Configure a `Scheduler` for prompt removal if memory is critical
+    - Call `cleanUp()` manually if you need immediate cleanup
+    - Remember that expired entries are invisible even before removal
+  </Accordion>
+
+  <Accordion title="Variable expiration considerations">
+    - Return `Long.MAX_VALUE` to indicate entries should never expire
+    - Return `currentDuration` in update/read methods to keep existing expiration
+    - Keep expiry calculations fast (they run on every access)
+    - Use helper methods like `Expiry.creating()` for simpler cases
+  </Accordion>
+</AccordionGroup>
+
+## Related topics
+
+- [Refresh](/core/refresh) - Reload entries before they expire
+- [Removal](/core/removal) - Handle expiration notifications
+- [Statistics](/core/statistics) - Monitor expiration patterns

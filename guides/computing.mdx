@@ -1,0 +1,610 @@
+---
+title: Computing Values
+description: Atomic compute operations and cache updates in Caffeine
+---
+
+Caffeine provides powerful atomic compute operations for safely updating cache entries in concurrent environments. This guide covers compute patterns, atomic updates, and best practices.
+
+## Compute Operations Overview
+
+Compute operations allow you to atomically compute or update cache entries based on their current state.
+
+<CardGroup cols={2}>
+  <Card title="Atomic" icon="lock">
+    Operations execute atomically per key
+  </Card>
+  <Card title="Thread-Safe" icon="shield">
+    No race conditions or data corruption
+  </Card>
+  <Card title="Flexible" icon="sliders">
+    Compute, update, or remove based on logic
+  </Card>
+  <Card title="Efficient" icon="bolt">
+    Single operation vs check-then-act
+  </Card>
+</CardGroup>
+
+## Basic Compute Methods
+
+### get(key, mappingFunction)
+
+The most common compute operation - loads a value if absent:
+
+```java
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+
+Cache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .build();
+
+// Compute if absent (atomic)
+User user = cache.get(userId, key -> {
+    // Only called if key is not present
+    return database.loadUser(key);
+});
+```
+
+<Note>
+The mapping function is called at most once per key, even under high concurrency.
+</Note>
+
+### Using ConcurrentMap Interface
+
+Access advanced compute operations via `asMap()`:
+
+```java
+import java.util.concurrent.ConcurrentMap;
+
+Cache<String, Integer> cache = Caffeine.newBuilder().build();
+ConcurrentMap<String, Integer> map = cache.asMap();
+
+// compute: Always executes function
+Integer newValue = map.compute(userId, (key, oldValue) -> {
+    if (oldValue == null) {
+        return 1; // Initialize
+    }
+    return oldValue + 1; // Increment
+});
+
+// computeIfAbsent: Only if key absent
+Integer value = map.computeIfAbsent(userId, key -> 0);
+
+// computeIfPresent: Only if key exists
+Integer updated = map.computeIfPresent(userId, (key, oldValue) -> 
+    oldValue + 1
+);
+```
+
+## Common Patterns
+
+### Counter Pattern
+
+Atomic increment/decrement operations:
+
+```java
+public class ViewCountCache {
+    private final Cache<String, Long> cache;
+    
+    public ViewCountCache() {
+        this.cache = Caffeine.newBuilder()
+            .maximumSize(100_000)
+            .expireAfterWrite(Duration.ofHours(1))
+            .build();
+    }
+    
+    public long incrementViews(String itemId) {
+        return cache.asMap().compute(itemId, (key, count) -> {
+            return (count == null) ? 1L : count + 1;
+        });
+    }
+    
+    public long decrementViews(String itemId) {
+        return cache.asMap().compute(itemId, (key, count) -> {
+            if (count == null || count <= 0) {
+                return 0L;
+            }
+            return count - 1;
+        });
+    }
+    
+    public long getViews(String itemId) {
+        return cache.getIfPresent(itemId) != null 
+            ? cache.getIfPresent(itemId) : 0L;
+    }
+}
+```
+
+### Accumulator Pattern
+
+Collect and aggregate values:
+
+```java
+public class MetricsCache {
+    private final Cache<String, List<Metric>> cache;
+    
+    public MetricsCache() {
+        this.cache = Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .build();
+    }
+    
+    public void addMetric(String category, Metric metric) {
+        cache.asMap().compute(category, (key, metrics) -> {
+            if (metrics == null) {
+                metrics = new ArrayList<>();
+            }
+            metrics.add(metric);
+            return metrics;
+        });
+    }
+    
+    public List<Metric> getMetrics(String category) {
+        return cache.getIfPresent(category) != null 
+            ? cache.getIfPresent(category) : Collections.emptyList();
+    }
+}
+```
+
+### Conditional Updates
+
+Update only when conditions are met:
+
+```java
+public class PriceCache {
+    private final Cache<String, Price> cache;
+    
+    public void updatePrice(String symbol, Price newPrice) {
+        cache.asMap().compute(symbol, (key, oldPrice) -> {
+            // Only update if newer
+            if (oldPrice == null || 
+                newPrice.getTimestamp() > oldPrice.getTimestamp()) {
+                return newPrice;
+            }
+            return oldPrice; // Keep old value
+        });
+    }
+    
+    public boolean updateIfChanged(String symbol, Price newPrice) {
+        var updated = new AtomicBoolean(false);
+        
+        cache.asMap().compute(symbol, (key, oldPrice) -> {
+            if (oldPrice == null || !oldPrice.equals(newPrice)) {
+                updated.set(true);
+                return newPrice;
+            }
+            return oldPrice;
+        });
+        
+        return updated.get();
+    }
+}
+```
+
+### Merge Pattern
+
+Combine new and existing values:
+
+```java
+public class UserActivityCache {
+    private final Cache<String, UserActivity> cache;
+    
+    public void recordActivity(String userId, Activity activity) {
+        cache.asMap().compute(userId, (key, current) -> {
+            if (current == null) {
+                return new UserActivity(activity);
+            }
+            // Merge new activity with existing
+            return current.merge(activity);
+        });
+    }
+}
+
+public class UserActivity {
+    private final List<Activity> activities;
+    private long lastActive;
+    
+    public UserActivity merge(Activity newActivity) {
+        this.activities.add(newActivity);
+        this.lastActive = System.currentTimeMillis();
+        return this;
+    }
+}
+```
+
+## Bulk Compute Operations
+
+### Batch Updates
+
+```java
+public void updateScores(Map<String, Integer> scoreDeltas) {
+    Cache<String, Integer> cache = getScoreCache();
+    ConcurrentMap<String, Integer> map = cache.asMap();
+    
+    scoreDeltas.forEach((userId, delta) -> {
+        map.compute(userId, (key, oldScore) -> {
+            int current = (oldScore != null) ? oldScore : 0;
+            return current + delta;
+        });
+    });
+}
+```
+
+### Parallel Compute
+
+```java
+import java.util.concurrent.CompletableFuture;
+
+public CompletableFuture<Void> updateMultipleAsync(
+        Map<String, User> updates) {
+    Cache<String, User> cache = getUserCache();
+    
+    List<CompletableFuture<Void>> futures = updates.entrySet()
+        .stream()
+        .map(entry -> CompletableFuture.runAsync(() -> {
+            cache.asMap().compute(entry.getKey(), (key, old) -> {
+                // Merge update with existing
+                return old != null 
+                    ? old.mergeWith(entry.getValue())
+                    : entry.getValue();
+            });
+        }))
+        .toList();
+    
+    return CompletableFuture.allOf(
+        futures.toArray(new CompletableFuture[0])
+    );
+}
+```
+
+## Advanced Patterns
+
+### Lazy Initialization with Double-Check
+
+```java
+public class ResourceCache {
+    private final Cache<String, ExpensiveResource> cache;
+    private final Set<String> initializing;
+    
+    public ResourceCache() {
+        this.cache = Caffeine.newBuilder().build();
+        this.initializing = ConcurrentHashMap.newKeySet();
+    }
+    
+    public ExpensiveResource getResource(String id) {
+        return cache.get(id, key -> {
+            // Double-check to prevent duplicate initialization
+            if (initializing.contains(key)) {
+                // Wait for other thread
+                return waitForInitialization(key);
+            }
+            
+            initializing.add(key);
+            try {
+                return initializeResource(key);
+            } finally {
+                initializing.remove(key);
+            }
+        });
+    }
+}
+```
+
+### Cascading Updates
+
+```java
+public class DependentCache {
+    private final Cache<String, Data> cache;
+    private final Map<String, Set<String>> dependencies;
+    
+    public void updateWithDependents(String key, Data newData) {
+        // Update main entry
+        cache.asMap().compute(key, (k, old) -> newData);
+        
+        // Update all dependent entries
+        Set<String> dependents = dependencies.get(key);
+        if (dependents != null) {
+            dependents.forEach(dependent -> {
+                cache.asMap().computeIfPresent(dependent, (k, old) -> 
+                    old.updateFromDependency(key, newData)
+                );
+            });
+        }
+    }
+}
+```
+
+### Time-Based Updates
+
+```java
+public class ThrottledCache {
+    private final Cache<String, TimestampedValue> cache;
+    private final Duration minUpdateInterval;
+    
+    public void updateIfStale(String key, Supplier<String> valueSupplier) {
+        cache.asMap().compute(key, (k, old) -> {
+            long now = System.currentTimeMillis();
+            
+            if (old == null || 
+                now - old.timestamp > minUpdateInterval.toMillis()) {
+                // Update: value is missing or stale
+                return new TimestampedValue(
+                    valueSupplier.get(), 
+                    now
+                );
+            }
+            
+            // Keep existing: too soon to update
+            return old;
+        });
+    }
+    
+    static class TimestampedValue {
+        final String value;
+        final long timestamp;
+        
+        TimestampedValue(String value, long timestamp) {
+            this.value = value;
+            this.timestamp = timestamp;
+        }
+    }
+}
+```
+
+## Async Compute Operations
+
+### AsyncCache Compute
+
+```java
+import com.github.benmanes.caffeine.cache.AsyncCache;
+
+AsyncCache<String, User> cache = Caffeine.newBuilder()
+    .buildAsync();
+
+// Async compute
+CompletableFuture<User> future = cache.get(userId, 
+    (key, executor) -> CompletableFuture.supplyAsync(
+        () -> database.loadUser(key),
+        executor
+    )
+);
+
+// Async map operations
+ConcurrentMap<String, CompletableFuture<User>> asyncMap = cache.asMap();
+
+CompletableFuture<User> computed = asyncMap.compute(userId, 
+    (key, oldFuture) -> {
+        if (oldFuture != null && !oldFuture.isDone()) {
+            return oldFuture; // Reuse pending future
+        }
+        
+        return CompletableFuture.supplyAsync(
+            () -> database.loadUser(key)
+        );
+    }
+);
+```
+
+### Async Conditional Updates
+
+```java
+public CompletableFuture<User> updateUserAsync(
+        String userId, 
+        Function<User, User> updater) {
+    AsyncCache<String, User> cache = getUserAsyncCache();
+    
+    return cache.get(userId, key -> loadUserAsync(key))
+        .thenCompose(user -> {
+            User updated = updater.apply(user);
+            
+            // Save to database
+            return database.saveUserAsync(updated)
+                .thenApply(saved -> {
+                    // Update cache
+                    cache.put(userId, CompletableFuture.completedFuture(saved));
+                    return saved;
+                });
+        });
+}
+```
+
+## Removal During Compute
+
+### Conditional Removal
+
+```java
+Cache<String, Session> cache = getSessionCache();
+
+// Remove if expired
+cache.asMap().compute(sessionId, (key, session) -> {
+    if (session != null && session.isExpired()) {
+        return null; // Returning null removes the entry
+    }
+    return session;
+});
+
+// Remove and return old value
+Session removed = cache.asMap().computeIfPresent(sessionId, 
+    (key, session) -> {
+        if (session.shouldBeRemoved()) {
+            return null;
+        }
+        return session;
+    }
+);
+```
+
+### Cleanup Pattern
+
+```java
+public class SessionCache {
+    private final Cache<String, Session> cache;
+    
+    public void cleanupExpiredSessions() {
+        ConcurrentMap<String, Session> map = cache.asMap();
+        long now = System.currentTimeMillis();
+        
+        // Iterate and remove expired entries
+        map.replaceAll((key, session) -> {
+            if (session.getExpiry() < now) {
+                return null; // Remove
+            }
+            return session; // Keep
+        });
+    }
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Keep Compute Functions Short">
+    Compute functions hold locks on the key. Keep them short and simple to avoid blocking other operations.
+    
+    ```java
+    // BAD: Long-running operation
+    cache.asMap().compute(key, (k, v) -> {
+        expensiveOperation(); // Blocks other threads!
+        return newValue;
+    });
+    
+    // GOOD: Do work outside compute
+    Value newValue = expensiveOperation();
+    cache.asMap().compute(key, (k, v) -> newValue);
+    ```
+  </Accordion>
+  
+  <Accordion title="Don't Modify Other Cache Entries">
+    Never update other cache entries from within a compute function - this can cause deadlocks.
+    
+    ```java
+    // BAD: Can deadlock
+    cache.asMap().compute(key1, (k, v) -> {
+        cache.put(key2, value); // DON'T DO THIS!
+        return newValue;
+    });
+    
+    // GOOD: Update outside compute
+    Value newValue = cache.asMap().compute(key1, (k, v) -> calculate());
+    cache.put(key2, relatedValue);
+    ```
+  </Accordion>
+  
+  <Accordion title="Handle Null Values Correctly">
+    Returning null from compute removes the entry. Be explicit about this behavior.
+    
+    ```java
+    cache.asMap().compute(key, (k, oldValue) -> {
+        if (shouldRemove(oldValue)) {
+            return null; // Explicitly remove
+        }
+        return oldValue != null ? update(oldValue) : create();
+    });
+    ```
+  </Accordion>
+  
+  <Accordion title="Use Appropriate Compute Method">
+    - `compute()`: Always executes, sees old value
+    - `computeIfAbsent()`: Only if absent, more efficient
+    - `computeIfPresent()`: Only if present, more efficient
+    
+    Choose the most specific method for your use case.
+  </Accordion>
+  
+  <Accordion title="Consider Idempotency">
+    In rare cases, compute functions might execute multiple times (e.g., during eviction). Design them to be idempotent when possible.
+  </Accordion>
+</AccordionGroup>
+
+## Performance Tips
+
+<Tabs>
+  <Tab title="Minimize Contention">
+    ```java
+    // BAD: All operations on same key
+    for (int i = 0; i < 1000; i++) {
+        cache.asMap().compute("counter", (k, v) -> 
+            (v != null ? v : 0) + 1
+        );
+    }
+    
+    // GOOD: Use different keys
+    int threadId = Thread.currentThread().getId();
+    String key = "counter-" + (threadId % 10);
+    cache.asMap().compute(key, (k, v) -> 
+        (v != null ? v : 0) + 1
+    );
+    ```
+  </Tab>
+  
+  <Tab title="Batch Operations">
+    ```java
+    // Instead of many individual computes
+    Map<String, Integer> updates = getUpdates();
+    
+    // Process in batches
+    updates.entrySet().parallelStream()
+        .forEach(entry -> {
+            cache.asMap().compute(
+                entry.getKey(),
+                (k, v) -> (v != null ? v : 0) + entry.getValue()
+            );
+        });
+    ```
+  </Tab>
+  
+  <Tab title="Prefer computeIfAbsent">
+    ```java
+    // computeIfAbsent is faster when key usually exists
+    User user = cache.asMap().computeIfAbsent(userId, 
+        key -> database.loadUser(key)
+    );
+    
+    // Equivalent but slower compute
+    User user = cache.asMap().compute(userId, (key, old) -> 
+        old != null ? old : database.loadUser(key)
+    );
+    ```
+  </Tab>
+</Tabs>
+
+## Debugging and Monitoring
+
+```java
+public class MonitoredCache<K, V> {
+    private final Cache<K, V> cache;
+    private final AtomicLong computeCount = new AtomicLong();
+    private final AtomicLong computeTime = new AtomicLong();
+    
+    public V computeWithMonitoring(K key, Function<K, V> mappingFunction) {
+        long start = System.nanoTime();
+        try {
+            return cache.get(key, k -> {
+                computeCount.incrementAndGet();
+                return mappingFunction.apply(k);
+            });
+        } finally {
+            computeTime.addAndGet(System.nanoTime() - start);
+        }
+    }
+    
+    public Map<String, Object> getMetrics() {
+        return Map.of(
+            "computeCount", computeCount.get(),
+            "avgComputeTimeMs", 
+                computeTime.get() / computeCount.get() / 1_000_000
+        );
+    }
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Testing Caches" icon="flask" href="/guides/testing">
+    Learn how to test compute operations
+  </Card>
+  <Card title="Performance Tuning" icon="gauge" href="/guides/performance">
+    Optimize compute performance
+  </Card>
+</CardGroup>

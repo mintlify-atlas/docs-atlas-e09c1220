@@ -1,0 +1,463 @@
+---
+title: Expiry
+description: Interface for calculating custom expiration times for cache entries
+---
+
+## Overview
+
+`Expiry` calculates when cache entries expire based on custom logic. A single expiration time is retained per entry and may be extended or reduced by subsequent evaluations.
+
+This provides fine-grained control over entry lifetimes beyond the simple time-based expiration policies (`expireAfterWrite`, `expireAfterAccess`).
+
+## Type Parameters
+
+<ParamField path="K" type="type parameter">
+  The type of keys
+</ParamField>
+
+<ParamField path="V" type="type parameter">
+  The type of values
+</ParamField>
+
+## Methods
+
+### expireAfterCreate
+
+```java
+long expireAfterCreate(K key, V value, long currentTime)
+```
+
+Specifies the duration until the entry should be automatically removed after creation.
+
+<ParamField path="key" type="K" required>
+  The key associated with this entry
+</ParamField>
+
+<ParamField path="value" type="V" required>
+  The value associated with this entry
+</ParamField>
+
+<ParamField path="currentTime" type="long" required>
+  The ticker's current time, in nanoseconds
+</ParamField>
+
+<ResponseField name="return" type="long">
+  The length of time before the entry expires, in nanoseconds. Return Long.MAX_VALUE to indicate no expiration.
+</ResponseField>
+
+<Note>
+  The `currentTime` is supplied by the configured Ticker and by default does not relate to system or wall-clock time.
+</Note>
+
+### expireAfterUpdate
+
+```java
+long expireAfterUpdate(K key, V value, long currentTime, long currentDuration)
+```
+
+Specifies the duration until the entry should be automatically removed after its value is replaced.
+
+<ParamField path="key" type="K" required>
+  The key associated with this entry
+</ParamField>
+
+<ParamField path="value" type="V" required>
+  The new value associated with this entry
+</ParamField>
+
+<ParamField path="currentTime" type="long" required>
+  The ticker's current time, in nanoseconds
+</ParamField>
+
+<ParamField path="currentDuration" type="long" required>
+  The entry's current duration, in nanoseconds
+</ParamField>
+
+<ResponseField name="return" type="long">
+  The length of time before the entry expires, in nanoseconds. Return currentDuration to not modify the expiration time.
+</ResponseField>
+
+<Info>
+  Return `currentDuration` to keep the existing expiration time unchanged.
+</Info>
+
+### expireAfterRead
+
+```java
+long expireAfterRead(K key, V value, long currentTime, long currentDuration)
+```
+
+Specifies the duration until the entry should be automatically removed after its last read.
+
+<ParamField path="key" type="K" required>
+  The key associated with this entry
+</ParamField>
+
+<ParamField path="value" type="V" required>
+  The value associated with this entry
+</ParamField>
+
+<ParamField path="currentTime" type="long" required>
+  The ticker's current time, in nanoseconds
+</ParamField>
+
+<ParamField path="currentDuration" type="long" required>
+  The entry's current duration, in nanoseconds
+</ParamField>
+
+<ResponseField name="return" type="long">
+  The length of time before the entry expires, in nanoseconds. Return currentDuration to not modify the expiration time.
+</ResponseField>
+
+### creating (Static Factory)
+
+```java
+static <K, V> Expiry<K, V> creating(BiFunction<K, V, Duration> function)
+```
+
+Returns an `Expiry` that removes entries after a duration based on creation time. The expiration time is not modified on updates or reads.
+
+<ParamField path="function" type="BiFunction<K, V, Duration>" required>
+  The function to calculate the expiration duration after creation
+</ParamField>
+
+<ResponseField name="return" type="Expiry<K, V>">
+  An Expiry instance that expires entries after creation
+</ResponseField>
+
+**Example:**
+```java
+Expiry<Key, Value> expiry = Expiry.creating((key, value) -> 
+    Duration.ofMinutes(value.getTimeToLive()));
+```
+
+### writing (Static Factory)
+
+```java
+static <K, V> Expiry<K, V> writing(BiFunction<K, V, Duration> function)
+```
+
+Returns an `Expiry` that removes entries after a duration based on creation or update time. The expiration time is not modified on reads.
+
+<ParamField path="function" type="BiFunction<K, V, Duration>" required>
+  The function to calculate the expiration duration after writes
+</ParamField>
+
+<ResponseField name="return" type="Expiry<K, V>">
+  An Expiry instance that expires entries after writes
+</ResponseField>
+
+**Example:**
+```java
+Expiry<Key, Value> expiry = Expiry.writing((key, value) -> 
+    Duration.ofMinutes(value.getFreshnessPeriod()));
+```
+
+### accessing (Static Factory)
+
+```java
+static <K, V> Expiry<K, V> accessing(BiFunction<K, V, Duration> function)
+```
+
+Returns an `Expiry` that removes entries after a duration based on creation, update, or read time.
+
+<ParamField path="function" type="BiFunction<K, V, Duration>" required>
+  The function to calculate the expiration duration after any access
+</ParamField>
+
+<ResponseField name="return" type="Expiry<K, V>">
+  An Expiry instance that expires entries after any access
+</ResponseField>
+
+**Example:**
+```java
+Expiry<Key, Value> expiry = Expiry.accessing((key, value) -> 
+    Duration.ofMinutes(value.getIdleTimeout()));
+```
+
+## Configuration
+
+Configure an `Expiry` policy using the Caffeine builder:
+
+```java
+Cache<Key, Value> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .expireAfter(new Expiry<Key, Value>() {
+        @Override
+        public long expireAfterCreate(Key key, Value value, long currentTime) {
+            return TimeUnit.MINUTES.toNanos(value.getTtlMinutes());
+        }
+        
+        @Override
+        public long expireAfterUpdate(Key key, Value value, 
+                long currentTime, long currentDuration) {
+            return TimeUnit.MINUTES.toNanos(value.getTtlMinutes());
+        }
+        
+        @Override
+        public long expireAfterRead(Key key, Value value,
+                long currentTime, long currentDuration) {
+            return currentDuration; // Don't change on reads
+        }
+    })
+    .build();
+```
+
+## Implementation Examples
+
+### Variable Expiration by Value
+
+```java
+public class Document {
+    private final int ttlMinutes;
+    
+    public int getTtlMinutes() {
+        return ttlMinutes;
+    }
+}
+
+// Each document specifies its own TTL
+Expiry<String, Document> expiry = Expiry.creating((id, doc) -> 
+    Duration.ofMinutes(doc.getTtlMinutes()));
+
+Cache<String, Document> cache = Caffeine.newBuilder()
+    .expireAfter(expiry)
+    .build();
+```
+
+### Time-of-Day Based Expiration
+
+```java
+Expiry<String, Data> expiry = new Expiry<>() {
+    @Override
+    public long expireAfterCreate(String key, Data value, long currentTime) {
+        // Expire at end of business day (5 PM)
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime endOfDay = now.withHour(17).withMinute(0).withSecond(0);
+        
+        if (now.isAfter(endOfDay)) {
+            // After hours - expire at tomorrow's end of day
+            endOfDay = endOfDay.plusDays(1);
+        }
+        
+        Duration until = Duration.between(now, endOfDay);
+        return until.toNanos();
+    }
+    
+    @Override
+    public long expireAfterUpdate(String key, Data value,
+            long currentTime, long currentDuration) {
+        return currentDuration; // Keep existing expiration
+    }
+    
+    @Override
+    public long expireAfterRead(String key, Data value,
+            long currentTime, long currentDuration) {
+        return currentDuration; // Keep existing expiration
+    }
+};
+```
+
+### Priority-Based Expiration
+
+```java
+enum Priority { LOW, MEDIUM, HIGH }
+
+public class CachedItem {
+    private final Priority priority;
+    
+    public Priority getPriority() {
+        return priority;
+    }
+}
+
+Expiry<String, CachedItem> expiry = Expiry.creating((key, item) -> {
+    return switch (item.getPriority()) {
+        case HIGH -> Duration.ofHours(24);
+        case MEDIUM -> Duration.ofHours(6);
+        case LOW -> Duration.ofHours(1);
+    };
+});
+```
+
+### Access-Count Based Expiration
+
+```java
+public class AccessTrackedValue {
+    private final AtomicInteger accessCount = new AtomicInteger(0);
+    private final String data;
+    
+    public void incrementAccess() {
+        accessCount.incrementAndGet();
+    }
+    
+    public int getAccessCount() {
+        return accessCount.get();
+    }
+}
+
+Expiry<String, AccessTrackedValue> expiry = new Expiry<>() {
+    @Override
+    public long expireAfterCreate(String key, AccessTrackedValue value, long currentTime) {
+        return TimeUnit.MINUTES.toNanos(30);
+    }
+    
+    @Override
+    public long expireAfterUpdate(String key, AccessTrackedValue value,
+            long currentTime, long currentDuration) {
+        return currentDuration;
+    }
+    
+    @Override
+    public long expireAfterRead(String key, AccessTrackedValue value,
+            long currentTime, long currentDuration) {
+        value.incrementAccess();
+        
+        // Popular items get longer TTL
+        if (value.getAccessCount() > 100) {
+            return TimeUnit.HOURS.toNanos(24);
+        } else if (value.getAccessCount() > 10) {
+            return TimeUnit.HOURS.toNanos(6);
+        }
+        return TimeUnit.MINUTES.toNanos(30);
+    }
+};
+```
+
+### Sliding Expiration with Limit
+
+```java
+Expiry<String, Data> expiry = new Expiry<>() {
+    private final long maxLifetime = TimeUnit.HOURS.toNanos(24);
+    private final long slidingWindow = TimeUnit.MINUTES.toNanos(30);
+    
+    @Override
+    public long expireAfterCreate(String key, Data value, long currentTime) {
+        return maxLifetime;
+    }
+    
+    @Override
+    public long expireAfterUpdate(String key, Data value,
+            long currentTime, long currentDuration) {
+        // Reset to max on update
+        return maxLifetime;
+    }
+    
+    @Override
+    public long expireAfterRead(String key, Data value,
+            long currentTime, long currentDuration) {
+        // Extend by sliding window, but don't exceed max
+        long remaining = currentDuration;
+        long extended = remaining + slidingWindow;
+        return Math.min(extended, maxLifetime);
+    }
+};
+```
+
+### Conditional Expiration
+
+```java
+Expiry<String, Result> expiry = Expiry.creating((key, result) -> {
+    if (result.isErrorResult()) {
+        // Error results expire quickly
+        return Duration.ofMinutes(1);
+    } else if (result.isPartialResult()) {
+        // Partial results expire moderately
+        return Duration.ofMinutes(30);
+    } else {
+        // Complete results last longer
+        return Duration.ofHours(6);
+    }
+});
+```
+
+## Best Practices
+
+### Do's
+
+- Keep expiry logic fast and deterministic
+- Use factory methods (`creating`, `writing`, `accessing`) for simple cases
+- Return `Long.MAX_VALUE` for entries that should never expire
+- Return `currentDuration` to keep existing expiration unchanged
+- Consider using the current time for time-based calculations
+- Use nanosecond precision for accuracy
+
+### Don'ts
+
+- Don't perform expensive computations in expiry methods
+- Avoid I/O operations or external calls
+- Don't throw exceptions from expiry methods
+- Avoid relying on mutable external state
+- Don't return negative durations
+- Avoid returning zero unless you want immediate expiration
+
+## Time Handling
+
+### Converting to Nanoseconds
+
+```java
+// From Duration
+Duration duration = Duration.ofMinutes(30);
+long nanos = duration.toNanos();
+
+// From TimeUnit
+long nanos = TimeUnit.MINUTES.toNanos(30);
+
+// From milliseconds
+long nanos = TimeUnit.MILLISECONDS.toNanos(millis);
+```
+
+### Using Ticker Time
+
+```java
+Expiry<String, Data> expiry = new Expiry<>() {
+    @Override
+    public long expireAfterCreate(String key, Data value, long currentTime) {
+        // currentTime is from the configured Ticker
+        // For relative times, just return duration
+        return TimeUnit.HOURS.toNanos(1);
+    }
+    
+    @Override
+    public long expireAfterUpdate(String key, Data value,
+            long currentTime, long currentDuration) {
+        // Calculate elapsed time if needed
+        long elapsedNanos = /* ticker.read() - creationTime */;
+        // ...
+        return TimeUnit.HOURS.toNanos(1);
+    }
+    
+    @Override
+    public long expireAfterRead(String key, Data value,
+            long currentTime, long currentDuration) {
+        return currentDuration;
+    }
+};
+```
+
+## When to Use
+
+Use `Expiry` when:
+
+- Different entries need different expiration times
+- Expiration depends on entry content or metadata
+- You need complex expiration logic (time-of-day, conditional, etc.)
+- Expiration should change based on access patterns
+- You want fine-grained control over entry lifetime
+
+Use simple time-based expiration instead when:
+
+- All entries expire after the same duration
+- You need `expireAfterWrite(Duration)` or `expireAfterAccess(Duration)`
+- Performance is critical (simpler policies are faster)
+
+## Related Interfaces
+
+- [Caffeine Builder](/api/caffeine) - Configuration with `expireAfter()`
+- [Expiration](/core/expiration) - Expiration guide
+- [RemovalListener](/api/removal-listener) - Listen to expirations
+
+## See Also
+
+- [Refresh](/core/refresh) - Automatic background refresh
+- [Statistics](/core/statistics) - Monitor expiration rates

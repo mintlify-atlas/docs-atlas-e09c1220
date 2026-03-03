@@ -1,0 +1,443 @@
+---
+title: Cache
+description: A semi-persistent mapping from keys to values with manual entry management and support for eviction policies
+---
+
+The `Cache` interface provides a thread-safe, high-performance cache with manual entry management. Cache entries are manually added using `get(key, mappingFunction)` or `put(key, value)`, and are stored until evicted or manually invalidated.
+
+## Overview
+
+Cache implementations are thread-safe and can be safely accessed by multiple concurrent threads. The cache supports various eviction policies configured through the [Caffeine](/api/caffeine) builder, including size-based, time-based, and reference-based eviction.
+
+## Retrieval Methods
+
+<ParamField path="getIfPresent(K key)" type="V">
+  Returns the value associated with the key, or `null` if there is no cached value.
+  
+  <Expandable title="parameters">
+    <ResponseField name="key" type="K" required>
+      The key whose associated value is to be returned
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="returns">
+    <ResponseField name="value" type="V">
+      The value mapped to the key, or null if no mapping exists
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `NullPointerException` - if the specified key is null
+  </Expandable>
+  
+  ```java
+  Cache<String, User> cache = Caffeine.newBuilder().build();
+  
+  User user = cache.getIfPresent("user123");
+  if (user == null) {
+    // Cache miss - value not present
+  }
+  ```
+</ParamField>
+
+<ParamField path="get(K key, Function<K, V> mappingFunction)" type="V">
+  Returns the value associated with the key, obtaining that value from the mapping function if necessary. This method provides the "if cached, return; otherwise create, cache and return" pattern.
+  
+  <Expandable title="parameters">
+    <ResponseField name="key" type="K" required>
+      The key with which the specified value is to be associated
+    </ResponseField>
+    <ResponseField name="mappingFunction" type="Function<K, V>" required>
+      The function to compute a value if the key is not present
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="returns">
+    <ResponseField name="value" type="V">
+      The current (existing or computed) value associated with the key
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `NullPointerException` - if key or mappingFunction is null
+    - `IllegalStateException` - if the computation detectably attempts a recursive update
+    - `RuntimeException` or `Error` - if the mappingFunction throws, leaving the mapping unestablished
+  </Expandable>
+  
+  ```java
+  Cache<String, User> cache = Caffeine.newBuilder()
+      .maximumSize(10_000)
+      .build();
+  
+  // Automatically load if not present
+  User user = cache.get("user123", userId -> database.getUserById(userId));
+  ```
+</ParamField>
+
+<ParamField path="getAllPresent(Iterable<K> keys)" type="Map<K, V>">
+  Returns a map of the values associated with the keys. The returned map only contains entries already present in the cache.
+  
+  <Expandable title="parameters">
+    <ResponseField name="keys" type="Iterable<K>" required>
+      The keys whose associated values are to be returned
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="returns">
+    <ResponseField name="map" type="Map<K, V>">
+      An unmodifiable mapping of keys to values found in the cache
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `NullPointerException` - if the collection is null or contains a null element
+  </Expandable>
+  
+  ```java
+  Cache<String, User> cache = Caffeine.newBuilder().build();
+  
+  List<String> userIds = Arrays.asList("user1", "user2", "user3");
+  Map<String, User> users = cache.getAllPresent(userIds);
+  
+  // Only contains cached values - may be partial
+  System.out.println("Found " + users.size() + " cached users");
+  ```
+</ParamField>
+
+<ParamField path="getAll(Iterable<K> keys, Function<Set<K>, Map<K, V>> mappingFunction)" type="Map<K, V>">
+  Returns a map of the values associated with the keys, creating or retrieving those values if necessary. Combines already cached entries with newly loaded entries.
+  
+  <Expandable title="parameters">
+    <ResponseField name="keys" type="Iterable<K>" required>
+      The keys whose associated values are to be returned
+    </ResponseField>
+    <ResponseField name="mappingFunction" type="Function<Set<K>, Map<K, V>>" required>
+      The function to compute values for keys not already present
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="returns">
+    <ResponseField name="map" type="Map<K, V>">
+      An unmodifiable mapping of keys to values for the specified keys
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `NullPointerException` - if the collection is null, contains null, or mappingFunction returns null
+    - `RuntimeException` or `Error` - if the mappingFunction throws
+  </Expandable>
+  
+  ```java
+  Cache<String, User> cache = Caffeine.newBuilder()
+      .maximumSize(10_000)
+      .build();
+  
+  List<String> userIds = Arrays.asList("user1", "user2", "user3");
+  
+  // Bulk load missing entries
+  Map<String, User> users = cache.getAll(userIds, 
+      missingIds -> database.getUsersByIds(missingIds));
+  
+  // All requested users are now in the map
+  System.out.println("Retrieved " + users.size() + " users");
+  ```
+</ParamField>
+
+## Modification Methods
+
+<ParamField path="put(K key, V value)" type="void">
+  Associates the value with the key in this cache. If the cache previously contained a value for the key, the old value is replaced.
+  
+  <Expandable title="parameters">
+    <ResponseField name="key" type="K" required>
+      The key with which the value is to be associated
+    </ResponseField>
+    <ResponseField name="value" type="V" required>
+      The value to be associated with the key
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `NullPointerException` - if the key or value is null
+  </Expandable>
+  
+  ```java
+  Cache<String, User> cache = Caffeine.newBuilder().build();
+  
+  User user = new User("user123", "John Doe");
+  cache.put("user123", user);
+  ```
+</ParamField>
+
+<ParamField path="putAll(Map<K, V> map)" type="void">
+  Copies all mappings from the specified map to the cache. Equivalent to calling `put(k, v)` for each mapping.
+  
+  <Expandable title="parameters">
+    <ResponseField name="map" type="Map<K, V>" required>
+      The mappings to be stored in this cache
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `NullPointerException` - if the map is null or contains null keys or values
+  </Expandable>
+  
+  ```java
+  Cache<String, User> cache = Caffeine.newBuilder().build();
+  
+  Map<String, User> users = new HashMap<>();
+  users.put("user1", new User("user1", "Alice"));
+  users.put("user2", new User("user2", "Bob"));
+  
+  cache.putAll(users);
+  ```
+</ParamField>
+
+## Invalidation Methods
+
+<ParamField path="invalidate(K key)" type="void">
+  Discards any cached value for the key. The behavior is undefined for an entry that is being loaded.
+  
+  <Expandable title="parameters">
+    <ResponseField name="key" type="K" required>
+      The key whose mapping is to be removed from the cache
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `NullPointerException` - if the specified key is null
+  </Expandable>
+  
+  ```java
+  Cache<String, User> cache = Caffeine.newBuilder().build();
+  
+  cache.invalidate("user123");
+  ```
+</ParamField>
+
+<ParamField path="invalidateAll(Iterable<K> keys)" type="void">
+  Discards any cached values for the keys. The behavior is undefined for entries that are being loaded.
+  
+  <Expandable title="parameters">
+    <ResponseField name="keys" type="Iterable<K>" required>
+      The keys whose associated values are to be removed
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `NullPointerException` - if the collection is null or contains a null element
+  </Expandable>
+  
+  ```java
+  Cache<String, User> cache = Caffeine.newBuilder().build();
+  
+  List<String> userIds = Arrays.asList("user1", "user2", "user3");
+  cache.invalidateAll(userIds);
+  ```
+</ParamField>
+
+<ParamField path="invalidateAll()" type="void">
+  Discards all entries in the cache. The behavior is undefined for entries that are being loaded.
+  
+  ```java
+  Cache<String, User> cache = Caffeine.newBuilder().build();
+  
+  // Clear all cached entries
+  cache.invalidateAll();
+  ```
+</ParamField>
+
+## Statistics and Maintenance
+
+<ParamField path="estimatedSize()" type="long">
+  Returns the approximate number of entries in the cache. The value is an estimate and may differ due to concurrent modifications or pending removals.
+  
+  <Expandable title="returns">
+    <ResponseField name="size" type="long">
+      The estimated number of mappings
+    </ResponseField>
+  </Expandable>
+  
+  ```java
+  Cache<String, User> cache = Caffeine.newBuilder()
+      .maximumSize(10_000)
+      .build();
+  
+  long size = cache.estimatedSize();
+  System.out.println("Cache contains approximately " + size + " entries");
+  ```
+</ParamField>
+
+<ParamField path="stats()" type="CacheStats">
+  Returns a current snapshot of this cache's cumulative statistics. All statistics are initialized to zero and are monotonically increasing.
+  
+  <Expandable title="returns">
+    <ResponseField name="stats" type="CacheStats">
+      The current snapshot of cache statistics
+    </ResponseField>
+  </Expandable>
+  
+  ```java
+  Cache<String, User> cache = Caffeine.newBuilder()
+      .maximumSize(10_000)
+      .recordStats()
+      .build();
+  
+  CacheStats stats = cache.stats();
+  System.out.println("Hit rate: " + stats.hitRate());
+  System.out.println("Miss rate: " + stats.missRate());
+  System.out.println("Eviction count: " + stats.evictionCount());
+  ```
+</ParamField>
+
+<ParamField path="cleanUp()" type="void">
+  Performs any pending maintenance operations needed by the cache. The specific activities performed are implementation-dependent.
+  
+  ```java
+  Cache<String, User> cache = Caffeine.newBuilder()
+      .expireAfterWrite(Duration.ofMinutes(10))
+      .build();
+  
+  // Manually trigger maintenance
+  cache.cleanUp();
+  ```
+</ParamField>
+
+## Views and Policy
+
+<ParamField path="asMap()" type="ConcurrentMap<K, V>">
+  Returns a thread-safe view of the entries stored in this cache. Modifications made to the map directly affect the cache.
+  
+  <Expandable title="returns">
+    <ResponseField name="map" type="ConcurrentMap<K, V>">
+      A thread-safe view supporting all optional Map operations
+    </ResponseField>
+  </Expandable>
+  
+  ```java
+  Cache<String, User> cache = Caffeine.newBuilder().build();
+  
+  ConcurrentMap<String, User> map = cache.asMap();
+  
+  // Direct map operations affect the cache
+  map.compute("user123", (key, oldValue) -> {
+    if (oldValue == null) {
+      return database.getUserById(key);
+    }
+    oldValue.incrementAccessCount();
+    return oldValue;
+  });
+  
+  // Iterate over cached entries
+  for (Map.Entry<String, User> entry : map.entrySet()) {
+    System.out.println(entry.getKey() + ": " + entry.getValue());
+  }
+  ```
+</ParamField>
+
+<ParamField path="policy()" type="Policy<K, V>">
+  Returns access to inspect and perform low-level operations based on the cache's runtime characteristics. Policy operations are optional and dependent on the cache configuration.
+  
+  <Expandable title="returns">
+    <ResponseField name="policy" type="Policy<K, V>">
+      Access to inspect and perform advanced operations
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="warning">
+    Policy operations must not be performed from within an atomic scope of another cache operation.
+  </Expandable>
+  
+  ```java
+  Cache<String, User> cache = Caffeine.newBuilder()
+      .maximumSize(10_000)
+      .build();
+  
+  Policy<String, User> policy = cache.policy();
+  
+  // Check if eviction is enabled
+  policy.eviction().ifPresent(eviction -> {
+    System.out.println("Max size: " + eviction.getMaximum());
+    System.out.println("Weighted size: " + eviction.weightedSize().orElse(0L));
+    
+    // Get hottest entries
+    Map<String, User> hottest = eviction.hottest(10);
+  });
+  ```
+</ParamField>
+
+## Usage Examples
+
+### Basic Cache Operations
+
+```java
+Cache<String, User> userCache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .expireAfterWrite(Duration.ofMinutes(10))
+    .build();
+
+// Get with loading function
+User user = userCache.get("user123", userId -> {
+    return database.getUserById(userId);
+});
+
+// Manual put
+userCache.put("user456", new User("user456", "Jane Doe"));
+
+// Check if present
+User cached = userCache.getIfPresent("user123");
+
+// Invalidate entry
+userCache.invalidate("user123");
+```
+
+### Bulk Operations
+
+```java
+Cache<String, Product> productCache = Caffeine.newBuilder()
+    .maximumSize(50_000)
+    .build();
+
+List<String> productIds = Arrays.asList("prod1", "prod2", "prod3");
+
+// Bulk load with mapping function
+Map<String, Product> products = productCache.getAll(productIds, missingIds -> {
+    return database.getProductsByIds(missingIds);
+});
+
+// Bulk put
+Map<String, Product> newProducts = loadProductsFromFile();
+productCache.putAll(newProducts);
+
+// Bulk invalidate
+productCache.invalidateAll(productIds);
+```
+
+### With Statistics
+
+```java
+Cache<String, Image> imageCache = Caffeine.newBuilder()
+    .maximumSize(100)
+    .recordStats()
+    .build();
+
+// Use the cache
+for (int i = 0; i < 1000; i++) {
+    String imageId = "image" + (i % 150);
+    imageCache.get(imageId, id -> loadImage(id));
+}
+
+// Check statistics
+CacheStats stats = imageCache.stats();
+System.out.printf("Requests: %d%n", stats.requestCount());
+System.out.printf("Hits: %d (%.2f%%)%n", stats.hitCount(), stats.hitRate() * 100);
+System.out.printf("Misses: %d (%.2f%%)%n", stats.missCount(), stats.missRate() * 100);
+System.out.printf("Evictions: %d%n", stats.evictionCount());
+```
+
+## Related APIs
+
+- [Caffeine](/api/caffeine) - Builder for creating cache instances
+- [LoadingCache](/api/loading-cache) - Cache with automatic loading
+- [AsyncCache](/api/async-cache) - Asynchronous cache interface
+- [Policy](/api/policy) - Cache policy inspection and control

@@ -1,0 +1,469 @@
+---
+title: Guava Cache Adapter
+description: Migrate from Guava Cache to Caffeine with minimal code changes
+---
+
+Caffeine provides a Guava adapter that allows you to use Caffeine as a drop-in replacement for Guava's Cache, providing better performance while maintaining API compatibility.
+
+## Installation
+
+Add the Guava adapter module to your project:
+
+<CodeGroup>
+```gradle Gradle
+implementation 'com.github.ben-manes.caffeine:guava:3.2.3'
+```
+
+```maven Maven
+<dependency>
+  <groupId>com.github.ben-manes.caffeine</groupId>
+  <artifactId>guava</artifactId>
+  <version>3.2.3</version>
+</dependency>
+```
+</CodeGroup>
+
+<Note>
+  The adapter provides Guava's `Cache` and `LoadingCache` interfaces backed by Caffeine's implementation.
+</Note>
+
+## Basic Usage
+
+Replace Guava's `CacheBuilder` with Caffeine's builder and wrap it in the Guava adapter:
+
+<CodeGroup>
+```java Before (Guava)
+import com.google.common.cache.CacheBuilder;
+import com.google.common.cache.Cache;
+
+Cache<String, User> cache = CacheBuilder.newBuilder()
+    .maximumSize(10_000)
+    .expireAfterWrite(5, TimeUnit.MINUTES)
+    .recordStats()
+    .build();
+
+cache.put("user123", user);
+User cached = cache.getIfPresent("user123");
+```
+
+```java After (Caffeine)
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.guava.CaffeinatedGuava;
+import com.google.common.cache.Cache;
+
+Cache<String, User> cache = CaffeinatedGuava.build(
+    Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .expireAfterWrite(Duration.ofMinutes(5))
+        .recordStats()
+);
+
+cache.put("user123", user);
+User cached = cache.getIfPresent("user123");
+```
+</CodeGroup>
+
+## Loading Cache
+
+Create a `LoadingCache` with automatic value loading:
+
+<CodeGroup>
+```java Guava Loader
+import com.google.common.cache.CacheLoader;
+import com.google.common.cache.LoadingCache;
+
+LoadingCache<String, User> cache = CaffeinatedGuava.build(
+    Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .expireAfterWrite(Duration.ofMinutes(5)),
+    new CacheLoader<String, User>() {
+        @Override
+        public User load(String key) throws Exception {
+            return database.findUser(key);
+        }
+        
+        @Override
+        public Map<String, User> loadAll(Iterable<? extends String> keys) throws Exception {
+            return database.findUsers(keys);
+        }
+    }
+);
+
+// Automatically loads on cache miss
+User user = cache.get("user123");
+
+// Bulk load
+Map<String, User> users = cache.getAll(List.of("user1", "user2", "user3"));
+```
+
+```java Caffeine Loader
+import com.github.benmanes.caffeine.cache.CacheLoader;
+
+// You can also use Caffeine's CacheLoader interface directly
+LoadingCache<String, User> cache = CaffeinatedGuava.build(
+    Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .expireAfterWrite(Duration.ofMinutes(5)),
+    CaffeinatedGuava.caffeinate(guavaCacheLoader)
+);
+```
+</CodeGroup>
+
+<Steps>
+  <Step title="Create Caffeine Builder">
+    Replace `CacheBuilder.newBuilder()` with `Caffeine.newBuilder()`.
+  </Step>
+  
+  <Step title="Wrap with Adapter">
+    Use `CaffeinatedGuava.build()` to create a Guava-compatible cache.
+  </Step>
+  
+  <Step title="Use Guava API">
+    Continue using the familiar Guava `Cache` or `LoadingCache` interface.
+  </Step>
+</Steps>
+
+## API Mapping
+
+Caffeine's builder methods map directly to Guava's `CacheBuilder`:
+
+### Configuration Methods
+
+| Guava CacheBuilder | Caffeine Builder | Notes |
+|--------------------|------------------|-------|
+| `maximumSize(long)` | `maximumSize(long)` | Identical |
+| `maximumWeight(long)` | `maximumWeight(long)` | Identical |
+| `weigher(Weigher)` | `weigher(Weigher)` | Different package |
+| `expireAfterWrite(Duration)` | `expireAfterWrite(Duration)` | Identical |
+| `expireAfterAccess(Duration)` | `expireAfterAccess(Duration)` | Identical |
+| `refreshAfterWrite(Duration)` | `refreshAfterWrite(Duration)` | Identical |
+| `weakKeys()` | `weakKeys()` | Identical |
+| `weakValues()` | `weakValues()` | Identical |
+| `softValues()` | `softValues()` | Identical |
+| `recordStats()` | `recordStats()` | Identical |
+| `removalListener(listener)` | `removalListener(listener)` | Different package |
+| `ticker(Ticker)` | `ticker(Ticker)` | Different package |
+
+### Cache Methods
+
+| Guava Cache Method | Description | Caffeine Support |
+|--------------------|-------------|------------------|
+| `get(key)` | Get value or null | ✓ Full support |
+| `getIfPresent(key)` | Get if cached | ✓ Full support |
+| `put(key, value)` | Store value | ✓ Full support |
+| `putAll(map)` | Bulk store | ✓ Full support |
+| `invalidate(key)` | Remove entry | ✓ Full support |
+| `invalidateAll()` | Clear cache | ✓ Full support |
+| `size()` | Estimated size | ✓ Full support |
+| `stats()` | Get statistics | ✓ Full support |
+| `asMap()` | Map view | ✓ Full support |
+| `cleanUp()` | Trigger maintenance | ✓ Full support |
+
+### LoadingCache Methods
+
+| Guava LoadingCache | Description | Caffeine Support |
+|--------------------|-------------|------------------|
+| `get(key)` | Get or load | ✓ Full support |
+| `getAll(keys)` | Bulk get or load | ✓ Full support |
+| `refresh(key)` | Async refresh | ✓ Full support |
+| `getUnchecked(key)` | Get without checked exception | ✓ Full support |
+
+## Migration Examples
+
+### Simple Cache
+
+<CodeGroup>
+```java Guava
+import com.google.common.cache.CacheBuilder;
+import com.google.common.cache.Cache;
+import java.util.concurrent.TimeUnit;
+
+Cache<Key, Graph> graphs = CacheBuilder.newBuilder()
+    .maximumSize(10_000)
+    .expireAfterWrite(10, TimeUnit.MINUTES)
+    .build();
+```
+
+```java Caffeine
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.guava.CaffeinatedGuava;
+import com.google.common.cache.Cache;
+import java.time.Duration;
+
+Cache<Key, Graph> graphs = CaffeinatedGuava.build(
+    Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .expireAfterWrite(Duration.ofMinutes(10))
+);
+```
+</CodeGroup>
+
+### Loading Cache with Stats
+
+<CodeGroup>
+```java Guava
+import com.google.common.cache.*;
+
+LoadingCache<Key, Graph> graphs = CacheBuilder.newBuilder()
+    .maximumSize(10_000)
+    .expireAfterWrite(10, TimeUnit.MINUTES)
+    .refreshAfterWrite(1, TimeUnit.MINUTES)
+    .recordStats()
+    .build(new CacheLoader<Key, Graph>() {
+        @Override
+        public Graph load(Key key) {
+            return createExpensiveGraph(key);
+        }
+    });
+
+CacheStats stats = graphs.stats();
+System.out.println("Hit rate: " + stats.hitRate());
+```
+
+```java Caffeine
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.guava.CaffeinatedGuava;
+import com.google.common.cache.*;
+
+LoadingCache<Key, Graph> graphs = CaffeinatedGuava.build(
+    Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .expireAfterWrite(Duration.ofMinutes(10))
+        .refreshAfterWrite(Duration.ofMinutes(1))
+        .recordStats(),
+    new CacheLoader<Key, Graph>() {
+        @Override
+        public Graph load(Key key) {
+            return createExpensiveGraph(key);
+        }
+    }
+);
+
+CacheStats stats = graphs.stats();
+System.out.println("Hit rate: " + stats.hitRate());
+```
+</CodeGroup>
+
+### Weighted Cache
+
+<CodeGroup>
+```java Guava
+import com.google.common.cache.Weigher;
+
+Cache<String, Document> cache = CacheBuilder.newBuilder()
+    .maximumWeight(100_000)
+    .weigher(new Weigher<String, Document>() {
+        @Override
+        public int weigh(String key, Document doc) {
+            return doc.getSize();
+        }
+    })
+    .build();
+```
+
+```java Caffeine
+import com.github.benmanes.caffeine.cache.Weigher;
+
+Cache<String, Document> cache = CaffeinatedGuava.build(
+    Caffeine.newBuilder()
+        .maximumWeight(100_000)
+        .weigher(new Weigher<String, Document>() {
+            @Override
+            public int weigh(String key, Document doc) {
+                return doc.getSize();
+            }
+        })
+);
+```
+</CodeGroup>
+
+<Warning>
+  Note that `Weigher` is from `com.github.benmanes.caffeine.cache.Weigher`, not Guava's weigher.
+</Warning>
+
+### Removal Listener
+
+<CodeGroup>
+```java Guava
+import com.google.common.cache.RemovalListener;
+import com.google.common.cache.RemovalNotification;
+
+Cache<Key, Resource> cache = CacheBuilder.newBuilder()
+    .removalListener(new RemovalListener<Key, Resource>() {
+        @Override
+        public void onRemoval(RemovalNotification<Key, Resource> notification) {
+            Resource resource = notification.getValue();
+            resource.close(); // Clean up
+        }
+    })
+    .build();
+```
+
+```java Caffeine
+import com.github.benmanes.caffeine.cache.RemovalListener;
+import com.github.benmanes.caffeine.cache.RemovalCause;
+
+Cache<Key, Resource> cache = CaffeinatedGuava.build(
+    Caffeine.newBuilder()
+        .removalListener((Key key, Resource resource, RemovalCause cause) -> {
+            if (resource != null) {
+                resource.close(); // Clean up
+            }
+        })
+);
+```
+</CodeGroup>
+
+<Warning>
+  `RemovalListener` has a different signature in Caffeine. Adapt your listener implementation accordingly.
+</Warning>
+
+## Bulk Loading
+
+Implement `loadAll()` for efficient bulk loading:
+
+```java
+import com.google.common.cache.CacheLoader;
+import com.google.common.collect.ImmutableMap;
+
+LoadingCache<String, User> cache = CaffeinatedGuava.build(
+    Caffeine.newBuilder().maximumSize(10_000),
+    new CacheLoader<String, User>() {
+        @Override
+        public User load(String key) throws Exception {
+            return database.findUser(key);
+        }
+        
+        @Override
+        public Map<String, User> loadAll(Iterable<? extends String> keys) throws Exception {
+            // More efficient than loading individually
+            List<User> users = database.findUsers(keys);
+            return users.stream()
+                .collect(ImmutableMap.toImmutableMap(User::getId, u -> u));
+        }
+    }
+);
+
+// Efficiently loads multiple entries
+ImmutableMap<String, User> users = cache.getAll(List.of("id1", "id2", "id3"));
+```
+
+## Converting Between Loaders
+
+Convert between Guava and Caffeine loaders:
+
+```java
+import com.github.benmanes.caffeine.guava.CaffeinatedGuava;
+
+// Convert Guava loader to Caffeine loader
+com.google.common.cache.CacheLoader<K, V> guavaLoader = ...;
+com.github.benmanes.caffeine.cache.CacheLoader<K, V> caffeineLoader =
+    CaffeinatedGuava.caffeinate(guavaLoader);
+
+// Use with pure Caffeine cache
+com.github.benmanes.caffeine.cache.LoadingCache<K, V> caffeineCache =
+    Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .build(caffeineLoader);
+```
+
+## Asynchronous Refresh
+
+Implement custom reload logic for background refresh:
+
+```java
+import com.google.common.cache.CacheLoader;
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.ListeningExecutorService;
+import com.google.common.util.concurrent.MoreExecutors;
+
+ListeningExecutorService executor = MoreExecutors.listeningDecorator(
+    Executors.newFixedThreadPool(4)
+);
+
+LoadingCache<String, Data> cache = CaffeinatedGuava.build(
+    Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .refreshAfterWrite(Duration.ofMinutes(1)),
+    new CacheLoader<String, Data>() {
+        @Override
+        public Data load(String key) throws Exception {
+            return fetchData(key);
+        }
+        
+        @Override
+        public ListenableFuture<Data> reload(String key, Data oldValue) {
+            // Async reload in background
+            return executor.submit(() -> fetchData(key));
+        }
+    }
+);
+```
+
+## Performance Benefits
+
+Caffeine provides significant performance improvements over Guava Cache:
+
+- **8x better read throughput** - More efficient concurrent access
+- **3x better write throughput** - Optimized write operations
+- **Near-optimal hit rate** - TinyLFU admission policy
+- **Lower memory overhead** - More compact data structures
+- **Better GC behavior** - Reduced object allocations
+
+## Common Use Cases
+
+### Memoization
+
+```java
+public class ExpensiveComputation {
+    private final LoadingCache<Input, Output> cache = CaffeinatedGuava.build(
+        Caffeine.newBuilder().maximumSize(1000),
+        new CacheLoader<Input, Output>() {
+            @Override
+            public Output load(Input input) {
+                return computeExpensiveResult(input);
+            }
+        }
+    );
+    
+    public Output compute(Input input) {
+        return cache.getUnchecked(input);
+    }
+}
+```
+
+### HTTP Response Cache
+
+```java
+LoadingCache<String, Response> httpCache = CaffeinatedGuava.build(
+    Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .expireAfterWrite(Duration.ofMinutes(5)),
+    new CacheLoader<String, Response>() {
+        @Override
+        public Response load(String url) throws IOException {
+            return httpClient.get(url);
+        }
+    }
+);
+```
+
+### Parsed Configuration Cache
+
+```java
+LoadingCache<Path, Config> configCache = CaffeinatedGuava.build(
+    Caffeine.newBuilder()
+        .expireAfterWrite(Duration.ofMinutes(10))
+        .refreshAfterWrite(Duration.ofMinutes(5)),
+    new CacheLoader<Path, Config>() {
+        @Override
+        public Config load(Path path) throws IOException {
+            return ConfigParser.parse(Files.readString(path));
+        }
+    }
+);
+```
+
+<Note>
+  The Guava adapter is fully compatible with existing Guava Cache code, making migration straightforward with immediate performance benefits.
+</Note>

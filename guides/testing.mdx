@@ -1,0 +1,656 @@
+---
+title: Testing Caches
+description: Best practices and patterns for testing Caffeine caches in your applications
+---
+
+Testing cache behavior is crucial for ensuring correctness and performance. This guide covers strategies for testing caches effectively, from unit tests to integration tests.
+
+## Testing Fundamentals
+
+<CardGroup cols={2}>
+  <Card title="Deterministic" icon="check">
+    Tests should be repeatable and predictable
+  </Card>
+  <Card title="Isolated" icon="box">
+    Test cache behavior independently
+  </Card>
+  <Card title="Fast" icon="bolt">
+    Use controlled time for quick tests
+  </Card>
+  <Card title="Comprehensive" icon="list-check">
+    Cover eviction, loading, and edge cases
+  </Card>
+</CardGroup>
+
+## Basic Cache Testing
+
+### Simple Cache Tests
+
+```java
+import org.junit.jupiter.api.Test;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class SimpleCacheTest {
+    
+    @Test
+    void testBasicOperations() {
+        Cache<String, String> cache = Caffeine.newBuilder()
+            .maximumSize(100)
+            .build();
+        
+        // Test put and get
+        cache.put("key1", "value1");
+        assertThat(cache.getIfPresent("key1")).isEqualTo("value1");
+        
+        // Test missing key
+        assertThat(cache.getIfPresent("missing")).isNull();
+        
+        // Test invalidation
+        cache.invalidate("key1");
+        assertThat(cache.getIfPresent("key1")).isNull();
+    }
+    
+    @Test
+    void testComputeIfAbsent() {
+        Cache<String, Integer> cache = Caffeine.newBuilder()
+            .maximumSize(100)
+            .build();
+        
+        // First call computes
+        Integer value1 = cache.get("counter", key -> 1);
+        assertThat(value1).isEqualTo(1);
+        
+        // Second call returns cached value
+        Integer value2 = cache.get("counter", key -> 999);
+        assertThat(value2).isEqualTo(1); // Not 999!
+    }
+    
+    @Test
+    void testSize() {
+        Cache<Integer, String> cache = Caffeine.newBuilder()
+            .maximumSize(10)
+            .build();
+        
+        for (int i = 0; i < 5; i++) {
+            cache.put(i, "value" + i);
+        }
+        
+        assertThat(cache.estimatedSize()).isEqualTo(5);
+        
+        cache.invalidateAll();
+        assertThat(cache.estimatedSize()).isEqualTo(0);
+    }
+}
+```
+
+## Testing with Controlled Time
+
+Use `Ticker` to control time in tests for predictable expiration behavior:
+
+```java
+import com.github.benmanes.caffeine.cache.Ticker;
+import java.time.Duration;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+
+class FakeTicker implements Ticker {
+    private final AtomicLong nanos = new AtomicLong();
+    
+    @Override
+    public long read() {
+        return nanos.get();
+    }
+    
+    public void advance(Duration duration) {
+        nanos.addAndGet(duration.toNanos());
+    }
+    
+    public void advance(long amount, TimeUnit unit) {
+        nanos.addAndGet(unit.toNanos(amount));
+    }
+}
+
+class ExpirationTest {
+    
+    @Test
+    void testExpireAfterWrite() {
+        FakeTicker ticker = new FakeTicker();
+        
+        Cache<String, String> cache = Caffeine.newBuilder()
+            .expireAfterWrite(Duration.ofMinutes(5))
+            .ticker(ticker)
+            .build();
+        
+        // Add entry
+        cache.put("key", "value");
+        assertThat(cache.getIfPresent("key")).isEqualTo("value");
+        
+        // Advance time by 4 minutes - still present
+        ticker.advance(Duration.ofMinutes(4));
+        assertThat(cache.getIfPresent("key")).isEqualTo("value");
+        
+        // Advance time by 2 more minutes - expired
+        ticker.advance(Duration.ofMinutes(2));
+        assertThat(cache.getIfPresent("key")).isNull();
+    }
+    
+    @Test
+    void testExpireAfterAccess() {
+        FakeTicker ticker = new FakeTicker();
+        
+        Cache<String, String> cache = Caffeine.newBuilder()
+            .expireAfterAccess(Duration.ofMinutes(5))
+            .ticker(ticker)
+            .build();
+        
+        cache.put("key", "value");
+        
+        // Access resets expiration
+        ticker.advance(Duration.ofMinutes(4));
+        cache.getIfPresent("key"); // Access!
+        
+        // Advance 4 more minutes - still present due to access
+        ticker.advance(Duration.ofMinutes(4));
+        assertThat(cache.getIfPresent("key")).isEqualTo("value");
+        
+        // Advance 2 more minutes without access - expired
+        ticker.advance(Duration.ofMinutes(2));
+        assertThat(cache.getIfPresent("key")).isNull();
+    }
+}
+```
+
+## Testing LoadingCache
+
+### Basic Loading Tests
+
+```java
+import com.github.benmanes.caffeine.cache.LoadingCache;
+import java.util.concurrent.atomic.AtomicInteger;
+
+class LoadingCacheTest {
+    
+    @Test
+    void testAutoLoading() {
+        AtomicInteger loadCount = new AtomicInteger();
+        
+        LoadingCache<String, String> cache = Caffeine.newBuilder()
+            .build(key -> {
+                loadCount.incrementAndGet();
+                return "loaded-" + key;
+            });
+        
+        // First access loads
+        String value1 = cache.get("key1");
+        assertThat(value1).isEqualTo("loaded-key1");
+        assertThat(loadCount.get()).isEqualTo(1);
+        
+        // Second access uses cache
+        String value2 = cache.get("key1");
+        assertThat(value2).isEqualTo("loaded-key1");
+        assertThat(loadCount.get()).isEqualTo(1); // Not incremented!
+    }
+    
+    @Test
+    void testBulkLoading() {
+        LoadingCache<String, String> cache = Caffeine.newBuilder()
+            .build(new CacheLoader<String, String>() {
+                @Override
+                public String load(String key) {
+                    return "single-" + key;
+                }
+                
+                @Override
+                public Map<String, String> loadAll(Set<? extends String> keys) {
+                    return keys.stream()
+                        .collect(Collectors.toMap(
+                            key -> key,
+                            key -> "bulk-" + key
+                        ));
+                }
+            });
+        
+        // Bulk load
+        Map<String, String> values = cache.getAll(
+            Set.of("key1", "key2", "key3")
+        );
+        
+        assertThat(values).containsEntry("key1", "bulk-key1");
+        assertThat(values).containsEntry("key2", "bulk-key2");
+        assertThat(values).containsEntry("key3", "bulk-key3");
+    }
+}
+```
+
+### Testing with Mock Loaders
+
+```java
+import static org.mockito.Mockito.*;
+
+class MockLoaderTest {
+    
+    @Test
+    void testCacheWithMockLoader() {
+        @SuppressWarnings("unchecked")
+        Function<String, User> mockLoader = mock(Function.class);
+        
+        User expectedUser = new User("user1", "John");
+        when(mockLoader.apply("user1")).thenReturn(expectedUser);
+        
+        Cache<String, User> cache = Caffeine.newBuilder()
+            .maximumSize(100)
+            .build();
+        
+        // First call - loader is invoked
+        User user1 = cache.get("user1", mockLoader);
+        assertThat(user1).isEqualTo(expectedUser);
+        verify(mockLoader, times(1)).apply("user1");
+        
+        // Second call - cached, loader not invoked
+        User user2 = cache.get("user1", mockLoader);
+        assertThat(user2).isEqualTo(expectedUser);
+        verify(mockLoader, times(1)).apply("user1"); // Still 1!
+    }
+}
+```
+
+## Testing Eviction
+
+### Size-Based Eviction
+
+```java
+class EvictionTest {
+    
+    @Test
+    void testMaximumSize() {
+        Cache<Integer, String> cache = Caffeine.newBuilder()
+            .maximumSize(3)
+            .build();
+        
+        // Fill cache
+        cache.put(1, "one");
+        cache.put(2, "two");
+        cache.put(3, "three");
+        
+        assertThat(cache.estimatedSize()).isEqualTo(3);
+        
+        // Trigger eviction
+        cache.put(4, "four");
+        
+        // Size is maintained
+        cache.cleanUp(); // Force maintenance
+        assertThat(cache.estimatedSize()).isLessThanOrEqualTo(3);
+    }
+    
+    @Test
+    void testWeightedEviction() {
+        Cache<String, byte[]> cache = Caffeine.newBuilder()
+            .maximumWeight(1000)
+            .weigher((key, value) -> value.length)
+            .build();
+        
+        // Add 500 bytes
+        cache.put("small", new byte[500]);
+        assertThat(cache.getIfPresent("small")).isNotNull();
+        
+        // Add another 600 bytes - should evict "small"
+        cache.put("large", new byte[600]);
+        cache.cleanUp();
+        
+        assertThat(cache.getIfPresent("large")).isNotNull();
+    }
+}
+```
+
+### Testing Removal Listeners
+
+```java
+import com.github.benmanes.caffeine.cache.RemovalCause;
+import com.github.benmanes.caffeine.cache.RemovalListener;
+
+class RemovalListenerTest {
+    
+    @Test
+    void testEvictionListener() {
+        List<String> evicted = new ArrayList<>();
+        
+        Cache<String, String> cache = Caffeine.newBuilder()
+            .maximumSize(2)
+            .evictionListener((key, value, cause) -> {
+                if (cause == RemovalCause.SIZE) {
+                    evicted.add((String) key);
+                }
+            })
+            .build();
+        
+        cache.put("key1", "value1");
+        cache.put("key2", "value2");
+        cache.put("key3", "value3"); // Evicts one
+        
+        cache.cleanUp();
+        assertThat(evicted).isNotEmpty();
+    }
+    
+    @Test
+    void testRemovalCauses() {
+        Map<RemovalCause, Integer> causes = new ConcurrentHashMap<>();
+        
+        Cache<String, String> cache = Caffeine.newBuilder()
+            .maximumSize(10)
+            .removalListener((key, value, cause) -> {
+                causes.merge(cause, 1, Integer::sum);
+            })
+            .build();
+        
+        cache.put("key1", "value1");
+        cache.invalidate("key1"); // EXPLICIT
+        
+        cache.put("key2", "value2");
+        cache.put("key2", "newValue"); // REPLACED
+        
+        assertThat(causes).containsEntry(RemovalCause.EXPLICIT, 1);
+        assertThat(causes).containsEntry(RemovalCause.REPLACED, 1);
+    }
+}
+```
+
+## Testing Async Caches
+
+### AsyncCache Tests
+
+```java
+import com.github.benmanes.caffeine.cache.AsyncCache;
+import java.util.concurrent.CompletableFuture;
+
+class AsyncCacheTest {
+    
+    @Test
+    void testAsyncOperations() throws Exception {
+        AsyncCache<String, String> cache = Caffeine.newBuilder()
+            .buildAsync();
+        
+        // Async load
+        CompletableFuture<String> future = cache.get("key", key -> 
+            CompletableFuture.supplyAsync(() -> "value")
+        );
+        
+        // Wait and verify
+        String value = future.get(1, TimeUnit.SECONDS);
+        assertThat(value).isEqualTo("value");
+        
+        // Check cache
+        CompletableFuture<String> cached = cache.getIfPresent("key");
+        assertThat(cached).isNotNull();
+        assertThat(cached.get()).isEqualTo("value");
+    }
+    
+    @Test
+    void testAsyncFailure() {
+        AsyncCache<String, String> cache = Caffeine.newBuilder()
+            .buildAsync();
+        
+        // Load that fails
+        CompletableFuture<String> future = cache.get("key", key -> {
+            CompletableFuture<String> failed = new CompletableFuture<>();
+            failed.completeExceptionally(new RuntimeException("Load failed"));
+            return failed;
+        });
+        
+        // Verify failure
+        assertThatThrownBy(() -> future.get())
+            .isInstanceOf(ExecutionException.class)
+            .hasCauseInstanceOf(RuntimeException.class);
+        
+        // Failed entry is removed
+        assertThat(cache.getIfPresent("key")).isNull();
+    }
+}
+```
+
+### AsyncLoadingCache Tests
+
+```java
+import com.github.benmanes.caffeine.cache.AsyncLoadingCache;
+
+class AsyncLoadingCacheTest {
+    
+    @Test
+    void testAsyncAutoLoad() throws Exception {
+        AsyncLoadingCache<String, String> cache = Caffeine.newBuilder()
+            .buildAsync(key -> 
+                CompletableFuture.supplyAsync(() -> "loaded-" + key)
+            );
+        
+        CompletableFuture<String> future = cache.get("key1");
+        String value = future.get(1, TimeUnit.SECONDS);
+        
+        assertThat(value).isEqualTo("loaded-key1");
+    }
+    
+    @Test
+    void testAsyncBulkLoad() throws Exception {
+        AsyncLoadingCache<String, String> cache = Caffeine.newBuilder()
+            .buildAsync(new AsyncCacheLoader<String, String>() {
+                @Override
+                public CompletableFuture<String> asyncLoad(
+                        String key, 
+                        Executor executor) {
+                    return CompletableFuture.supplyAsync(
+                        () -> "single-" + key,
+                        executor
+                    );
+                }
+                
+                @Override
+                public CompletableFuture<Map<String, String>> asyncLoadAll(
+                        Set<? extends String> keys,
+                        Executor executor) {
+                    return CompletableFuture.supplyAsync(() -> 
+                        keys.stream().collect(Collectors.toMap(
+                            key -> key,
+                            key -> "bulk-" + key
+                        )),
+                        executor
+                    );
+                }
+            });
+        
+        CompletableFuture<Map<String, String>> future = 
+            cache.getAll(Set.of("k1", "k2"));
+        
+        Map<String, String> values = future.get(1, TimeUnit.SECONDS);
+        assertThat(values).containsEntry("k1", "bulk-k1");
+        assertThat(values).containsEntry("k2", "bulk-k2");
+    }
+}
+```
+
+## Testing Statistics
+
+```java
+import com.github.benmanes.caffeine.cache.stats.CacheStats;
+
+class StatisticsTest {
+    
+    @Test
+    void testCacheStats() {
+        LoadingCache<String, String> cache = Caffeine.newBuilder()
+            .recordStats()
+            .build(key -> "loaded-" + key);
+        
+        // Generate some hits and misses
+        cache.get("key1"); // Miss (load)
+        cache.get("key1"); // Hit
+        cache.get("key2"); // Miss (load)
+        cache.get("key1"); // Hit
+        
+        CacheStats stats = cache.stats();
+        
+        assertThat(stats.requestCount()).isEqualTo(4);
+        assertThat(stats.hitCount()).isEqualTo(2);
+        assertThat(stats.missCount()).isEqualTo(2);
+        assertThat(stats.hitRate()).isEqualTo(0.5);
+        assertThat(stats.loadCount()).isEqualTo(2);
+    }
+}
+```
+
+## Integration Testing
+
+### Testing with Real Dependencies
+
+```java
+@SpringBootTest
+class CacheIntegrationTest {
+    
+    @Autowired
+    private UserRepository repository;
+    
+    private LoadingCache<String, User> cache;
+    
+    @BeforeEach
+    void setUp() {
+        cache = Caffeine.newBuilder()
+            .maximumSize(100)
+            .recordStats()
+            .build(userId -> repository.findById(userId)
+                .orElseThrow(() -> new UserNotFoundException(userId)));
+    }
+    
+    @Test
+    void testCacheWithDatabase() {
+        // First load - hits database
+        User user1 = cache.get("user123");
+        assertThat(user1.getId()).isEqualTo("user123");
+        
+        // Second load - from cache
+        User user2 = cache.get("user123");
+        assertThat(user2).isSameAs(user1);
+        
+        // Verify only one database call
+        CacheStats stats = cache.stats();
+        assertThat(stats.loadCount()).isEqualTo(1);
+    }
+}
+```
+
+### Testing Cache Warm-up
+
+```java
+class CacheWarmupTest {
+    
+    @Test
+    void testWarmup() {
+        LoadingCache<String, String> cache = Caffeine.newBuilder()
+            .build(key -> expensiveLoad(key));
+        
+        // Warm up cache
+        Set<String> commonKeys = Set.of("key1", "key2", "key3");
+        cache.getAll(commonKeys);
+        
+        // Verify all keys cached
+        commonKeys.forEach(key -> 
+            assertThat(cache.getIfPresent(key)).isNotNull()
+        );
+        
+        // Subsequent access is fast
+        long start = System.nanoTime();
+        cache.get("key1");
+        long elapsed = System.nanoTime() - start;
+        
+        assertThat(elapsed).isLessThan(TimeUnit.MILLISECONDS.toNanos(1));
+    }
+}
+```
+
+## Performance Testing
+
+```java
+import org.junit.jupiter.api.Tag;
+
+@Tag("performance")
+class CachePerformanceTest {
+    
+    @Test
+    void testConcurrentAccess() throws InterruptedException {
+        Cache<Integer, String> cache = Caffeine.newBuilder()
+            .maximumSize(1000)
+            .build();
+        
+        int threads = 10;
+        int operationsPerThread = 10000;
+        
+        ExecutorService executor = Executors.newFixedThreadPool(threads);
+        CountDownLatch latch = new CountDownLatch(threads);
+        
+        long start = System.currentTimeMillis();
+        
+        for (int i = 0; i < threads; i++) {
+            executor.submit(() -> {
+                try {
+                    Random random = new Random();
+                    for (int j = 0; j < operationsPerThread; j++) {
+                        int key = random.nextInt(100);
+                        cache.get(key, k -> "value" + k);
+                    }
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+        
+        latch.await();
+        long elapsed = System.currentTimeMillis() - start;
+        
+        double opsPerSecond = 
+            (threads * operationsPerThread * 1000.0) / elapsed;
+        
+        System.out.println("Operations/second: " + opsPerSecond);
+        assertThat(opsPerSecond).isGreaterThan(100_000);
+        
+        executor.shutdown();
+    }
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use Deterministic Time">
+    Always use `FakeTicker` for testing time-based behavior. This makes tests fast, deterministic, and independent of system time.
+  </Accordion>
+  
+  <Accordion title="Test Cache Boundaries">
+    Test behavior at size limits, during eviction, and with expired entries. These edge cases often reveal bugs.
+  </Accordion>
+  
+  <Accordion title="Verify Load Counts">
+    Use statistics or counters to verify that loading functions are called the expected number of times.
+  </Accordion>
+  
+  <Accordion title="Test Concurrent Access">
+    Caches are designed for concurrency. Include tests with multiple threads to verify thread-safety.
+  </Accordion>
+  
+  <Accordion title="Mock Expensive Operations">
+    Mock database calls and external services in unit tests. Use real dependencies only in integration tests.
+  </Accordion>
+  
+  <Accordion title="Test Failure Scenarios">
+    Verify cache behavior when loading fails, returns null, or throws exceptions.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Performance Tuning" icon="gauge" href="/guides/performance">
+    Optimize your cache configuration based on test results
+  </Card>
+  <Card title="Cache Types" icon="box" href="/guides/cache-types">
+    Learn about different cache types and their testing needs
+  </Card>
+</CardGroup>

@@ -1,0 +1,401 @@
+---
+title: JCache Integration
+description: Use Caffeine as a JSR-107 JCache provider with full standards compliance
+---
+
+Caffeine provides a complete JSR-107 (JCache) implementation, allowing you to use standard Java caching APIs backed by Caffeine's high-performance cache engine.
+
+## Installation
+
+Add the JCache module to your project:
+
+<CodeGroup>
+```gradle Gradle
+implementation 'com.github.ben-manes.caffeine:jcache:3.2.3'
+```
+
+```maven Maven
+<dependency>
+  <groupId>com.github.ben-manes.caffeine</groupId>
+  <artifactId>jcache</artifactId>
+  <version>3.2.3</version>
+</dependency>
+```
+</CodeGroup>
+
+<Note>
+  The JCache module requires Java 11 or higher. For Java 8, use version 2.x.
+</Note>
+
+## Basic Usage
+
+Caffeine's JCache provider is automatically discovered through the standard `ServiceLoader` mechanism:
+
+```java
+import javax.cache.Caching;
+import javax.cache.Cache;
+import javax.cache.CacheManager;
+import javax.cache.configuration.MutableConfiguration;
+
+// Get the caching provider
+CacheManager cacheManager = Caching.getCachingProvider()
+    .getCacheManager();
+
+// Create a cache with a simple configuration
+MutableConfiguration<String, Integer> configuration =
+    new MutableConfiguration<String, Integer>()
+        .setTypes(String.class, Integer.class)
+        .setStoreByValue(false)
+        .setStatisticsEnabled(true);
+
+Cache<String, Integer> cache = cacheManager.createCache("simpleCache", configuration);
+
+// Use the cache
+cache.put("key", 100);
+Integer value = cache.get("key");
+```
+
+## Caffeine-Specific Configuration
+
+Caffeine extends the standard JCache configuration with additional features through `CaffeineConfiguration`:
+
+```java
+import com.github.benmanes.caffeine.jcache.configuration.CaffeineConfiguration;
+import java.util.OptionalLong;
+import java.util.concurrent.TimeUnit;
+
+var config = new CaffeineConfiguration<String, String>()
+    // Standard JCache settings
+    .setTypes(String.class, String.class)
+    .setStoreByValue(false)
+    .setStatisticsEnabled(true)
+    .setManagementEnabled(true)
+    
+    // Caffeine-specific: size-based eviction
+    .setMaximumSize(OptionalLong.of(10_000))
+    
+    // Caffeine-specific: time-based expiration
+    .setExpireAfterWrite(OptionalLong.of(TimeUnit.MINUTES.toNanos(5)))
+    .setExpireAfterAccess(OptionalLong.of(TimeUnit.MINUTES.toNanos(10)))
+    
+    // Caffeine-specific: refresh after write
+    .setRefreshAfterWrite(OptionalLong.of(TimeUnit.MINUTES.toNanos(1)));
+
+Cache<String, String> cache = cacheManager.createCache("caffeineCache", config);
+```
+
+<Steps>
+  <Step title="Define Cache Types">
+    Use `setTypes()` to specify the key and value types for type safety.
+  </Step>
+  
+  <Step title="Configure Eviction">
+    Set `maximumSize` or `maximumWeight` (with a `Weigher`) for size-based eviction.
+  </Step>
+  
+  <Step title="Configure Expiration">
+    Use `expireAfterWrite` and `expireAfterAccess` for time-based expiration.
+  </Step>
+  
+  <Step title="Enable Monitoring">
+    Set `statisticsEnabled` and `managementEnabled` for JMX monitoring.
+  </Step>
+</Steps>
+
+## Configuration File
+
+Caffeine supports external configuration using Typesafe Config (HOCON format):
+
+<CodeGroup>
+```hocon application.conf
+caffeine.jcache {
+  # Default settings for all caches
+  default {
+    policy.maximum.size = 500
+  }
+  
+  # Named cache configuration
+  user-cache {
+    key-type = java.lang.String
+    value-type = com.example.User
+    
+    store-by-value.enabled = false
+    
+    read-through {
+      enabled = true
+      loader = com.example.UserCacheLoader
+    }
+    
+    write-through {
+      enabled = true
+      writer = com.example.UserCacheWriter
+    }
+    
+    monitoring {
+      statistics = true
+      management = true
+    }
+    
+    policy {
+      maximum.size = 10000
+      
+      eager-expiration {
+        after-write = 5m
+        after-access = 10m
+      }
+      
+      refresh.after-write = 1m
+    }
+    
+    listeners = [
+      {
+        class = com.example.UserEventListener
+        filter = com.example.UserEventFilter
+        synchronous = false
+        old-value-required = false
+      }
+    ]
+  }
+}
+```
+
+```java Java
+import com.typesafe.config.ConfigFactory;
+import com.github.benmanes.caffeine.jcache.configuration.TypesafeConfigurator;
+
+Config config = ConfigFactory.load();
+CacheManager cacheManager = Caching.getCachingProvider()
+    .getCacheManager(URI.create("custom.conf"), classLoader);
+
+// Cache is automatically configured from application.conf
+Cache<String, User> cache = cacheManager.getCache("user-cache", String.class, User.class);
+```
+</CodeGroup>
+
+## Read-Through and Write-Through
+
+Implement cache loaders and writers for integration with data sources:
+
+```java
+import javax.cache.integration.CacheLoader;
+import javax.cache.integration.CacheWriter;
+
+public class DatabaseCacheLoader implements CacheLoader<String, User> {
+    private final DataSource dataSource;
+    
+    @Override
+    public User load(String key) throws CacheLoaderException {
+        // Load from database
+        return dataSource.findUserById(key);
+    }
+    
+    @Override
+    public Map<String, User> loadAll(Iterable<? extends String> keys) {
+        // Bulk load from database
+        return dataSource.findUsersByIds(keys);
+    }
+}
+
+public class DatabaseCacheWriter implements CacheWriter<String, User> {
+    private final DataSource dataSource;
+    
+    @Override
+    public void write(Cache.Entry<? extends String, ? extends User> entry) {
+        dataSource.save(entry.getValue());
+    }
+    
+    @Override
+    public void delete(Object key) {
+        dataSource.delete((String) key);
+    }
+}
+```
+
+```java
+import javax.cache.configuration.FactoryBuilder;
+
+var config = new CaffeineConfiguration<String, User>()
+    .setReadThrough(true)
+    .setCacheLoaderFactory(FactoryBuilder.factoryOf(new DatabaseCacheLoader(dataSource)))
+    .setWriteThrough(true)
+    .setCacheWriterFactory(FactoryBuilder.factoryOf(new DatabaseCacheWriter(dataSource)));
+
+Cache<String, User> cache = cacheManager.createCache("userCache", config);
+
+// Automatically loads from database on cache miss
+User user = cache.get("user123");
+
+// Automatically writes to database
+cache.put("user123", updatedUser);
+```
+
+## Entry Processors
+
+Use entry processors for atomic cache operations:
+
+```java
+import javax.cache.processor.EntryProcessor;
+import javax.cache.processor.MutableEntry;
+
+public class IncrementProcessor implements EntryProcessor<String, Integer, Integer> {
+    private final int delta;
+    
+    public IncrementProcessor(int delta) {
+        this.delta = delta;
+    }
+    
+    @Override
+    public Integer process(MutableEntry<String, Integer> entry, Object... arguments) {
+        Integer current = entry.exists() ? entry.getValue() : 0;
+        Integer updated = current + delta;
+        entry.setValue(updated);
+        return updated;
+    }
+}
+
+// Use the processor
+Integer result = cache.invoke("counter", new IncrementProcessor(1));
+```
+
+## Event Listeners
+
+Register listeners to react to cache events:
+
+```java
+import javax.cache.event.*;
+
+public class CacheEventLogger implements CacheEntryCreatedListener<String, User>,
+                                         CacheEntryUpdatedListener<String, User>,
+                                         CacheEntryRemovedListener<String, User>,
+                                         CacheEntryExpiredListener<String, User> {
+    @Override
+    public void onCreated(Iterable<CacheEntryEvent<? extends String, ? extends User>> events) {
+        events.forEach(event -> System.out.println("Created: " + event.getKey()));
+    }
+    
+    @Override
+    public void onUpdated(Iterable<CacheEntryEvent<? extends String, ? extends User>> events) {
+        events.forEach(event -> System.out.println("Updated: " + event.getKey()));
+    }
+    
+    @Override
+    public void onRemoved(Iterable<CacheEntryEvent<? extends String, ? extends User>> events) {
+        events.forEach(event -> System.out.println("Removed: " + event.getKey()));
+    }
+    
+    @Override
+    public void onExpired(Iterable<CacheEntryEvent<? extends String, ? extends User>> events) {
+        events.forEach(event -> System.out.println("Expired: " + event.getKey()));
+    }
+}
+
+// Register the listener
+MutableCacheEntryListenerConfiguration<String, User> listenerConfig =
+    new MutableCacheEntryListenerConfiguration<>(
+        FactoryBuilder.factoryOf(new CacheEventLogger()),
+        null, // no filter
+        false, // not old value required
+        true   // synchronous
+    );
+
+cache.registerCacheEntryListener(listenerConfig);
+```
+
+## JMX Monitoring
+
+Enable JMX for runtime monitoring and management:
+
+```java
+var config = new CaffeineConfiguration<String, String>()
+    .setStatisticsEnabled(true)
+    .setManagementEnabled(true);
+
+Cache<String, String> cache = cacheManager.createCache("monitoredCache", config);
+
+// Access statistics
+CacheStatisticsMXBean stats = 
+    JMX.newMXBeanProxy(ManagementFactory.getPlatformMBeanServer(),
+        new ObjectName("javax.cache:type=CacheStatistics,Cache=monitoredCache"),
+        CacheStatisticsMXBean.class);
+
+System.out.println("Hit rate: " + stats.getCacheHitPercentage());
+System.out.println("Hits: " + stats.getCacheHits());
+System.out.println("Misses: " + stats.getCacheMisses());
+```
+
+## Weighted Eviction
+
+Use custom weighers for weighted size-based eviction:
+
+```java
+import com.github.benmanes.caffeine.cache.Weigher;
+import javax.cache.configuration.Factory;
+
+public class UserWeigher implements Weigher<String, User> {
+    @Override
+    public int weigh(String key, User user) {
+        return user.getEmailList().size() + user.getPreferences().size();
+    }
+}
+
+var config = new CaffeineConfiguration<String, User>()
+    .setMaximumWeight(OptionalLong.of(100_000))
+    .setWeigherFactory(Optional.of(() -> new UserWeigher()));
+```
+
+## API Mapping
+
+Common JSR-107 operations and their Caffeine equivalents:
+
+| JCache API | Description | Caffeine Equivalent |
+|------------|-------------|---------------------|
+| `get(key)` | Get a value | `cache.getIfPresent(key)` |
+| `put(key, value)` | Put a value | `cache.put(key, value)` |
+| `getAndPut(key, value)` | Get and replace | `cache.asMap().put(key, value)` |
+| `putIfAbsent(key, value)` | Conditional put | `cache.asMap().putIfAbsent(key, value)` |
+| `remove(key)` | Remove entry | `cache.invalidate(key)` |
+| `replace(key, value)` | Replace if exists | `cache.asMap().replace(key, value)` |
+| `clear()` | Clear cache | `cache.invalidateAll()` |
+| `invoke()` | Entry processor | N/A (JCache-specific) |
+
+<Warning>
+  Store-by-value is disabled by default in Caffeine's JCache implementation for better performance. Enable it with `setStoreByValue(true)` if you need defensive copying.
+</Warning>
+
+## Common Use Cases
+
+### Database Query Cache
+
+```java
+var config = new CaffeineConfiguration<String, ResultSet>()
+    .setMaximumSize(OptionalLong.of(1000))
+    .setExpireAfterWrite(OptionalLong.of(TimeUnit.MINUTES.toNanos(15)))
+    .setReadThrough(true)
+    .setCacheLoaderFactory(() -> new QueryCacheLoader(database));
+
+Cache<String, ResultSet> queryCache = cacheManager.createCache("queries", config);
+```
+
+### Session Store
+
+```java
+var config = new CaffeineConfiguration<String, Session>()
+    .setExpireAfterAccess(OptionalLong.of(TimeUnit.MINUTES.toNanos(30)))
+    .setMaximumSize(OptionalLong.of(10_000))
+    .setWriteThrough(true)
+    .setCacheWriterFactory(() -> new SessionWriter(redis));
+
+Cache<String, Session> sessions = cacheManager.createCache("sessions", config);
+```
+
+### API Response Cache
+
+```java
+var config = new CaffeineConfiguration<String, ApiResponse>()
+    .setMaximumSize(OptionalLong.of(5000))
+    .setExpireAfterWrite(OptionalLong.of(TimeUnit.SECONDS.toNanos(60)))
+    .setRefreshAfterWrite(OptionalLong.of(TimeUnit.SECONDS.toNanos(30)))
+    .setStatisticsEnabled(true);
+
+Cache<String, ApiResponse> apiCache = cacheManager.createCache("api", config);
+```

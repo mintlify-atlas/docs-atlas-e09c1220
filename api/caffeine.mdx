@@ -1,0 +1,621 @@
+---
+title: Caffeine
+description: Builder class for constructing Cache, LoadingCache, AsyncCache, and AsyncLoadingCache instances with customizable features
+---
+
+The `Caffeine` class is the primary builder for creating high-performance cache instances. It provides a fluent API for configuring cache behavior including size-based eviction, time-based expiration, automatic loading, weak/soft references, and statistics collection.
+
+## Creating a Builder
+
+<ParamField path="newBuilder()" type="static Caffeine<Object, Object>">
+  Creates a new `Caffeine` instance with default settings, including strong keys, strong values, and no automatic eviction.
+  
+  ```java
+  Caffeine<Object, Object> builder = Caffeine.newBuilder();
+  ```
+</ParamField>
+
+<ParamField path="from(CaffeineSpec spec)" type="static Caffeine<Object, Object>">
+  Constructs a new `Caffeine` instance from a `CaffeineSpec` specification.
+  
+  <Expandable title="parameters">
+    <ResponseField name="spec" type="CaffeineSpec" required>
+      The specification to build from
+    </ResponseField>
+  </Expandable>
+  
+  ```java
+  CaffeineSpec spec = CaffeineSpec.parse("maximumSize=100,expireAfterWrite=5m");
+  Caffeine<Object, Object> builder = Caffeine.from(spec);
+  ```
+</ParamField>
+
+<ParamField path="from(String spec)" type="static Caffeine<Object, Object>">
+  Constructs a new `Caffeine` instance from a specification string.
+  
+  <Expandable title="parameters">
+    <ResponseField name="spec" type="String" required>
+      A string in the format specified by CaffeineSpec
+    </ResponseField>
+  </Expandable>
+  
+  ```java
+  Caffeine<Object, Object> builder = Caffeine.from("maximumSize=100,expireAfterWrite=5m");
+  ```
+</ParamField>
+
+## Size-Based Eviction
+
+<ParamField path="initialCapacity(int initialCapacity)" type="Caffeine<K, V>">
+  Sets the minimum total size for the internal data structures. Providing a large enough estimate avoids expensive resizing operations.
+  
+  <Expandable title="parameters">
+    <ResponseField name="initialCapacity" type="int" required>
+      Minimum total size for the internal data structures
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `IllegalArgumentException` - if initialCapacity is negative
+    - `IllegalStateException` - if an initial capacity was already set
+  </Expandable>
+  
+  ```java
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .initialCapacity(100)
+      .build();
+  ```
+</ParamField>
+
+<ParamField path="maximumSize(long maximumSize)" type="Caffeine<K, V>">
+  Specifies the maximum number of entries the cache may contain. The cache may evict entries before this limit is exceeded. Entries are evicted based on frequency and recency.
+  
+  <Expandable title="parameters">
+    <ResponseField name="maximumSize" type="long" required>
+      The maximum size of the cache
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `IllegalArgumentException` - if maximumSize is negative
+    - `IllegalStateException` - if a maximum size or weight was already set
+  </Expandable>
+  
+  ```java
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .maximumSize(10_000)
+      .build();
+  ```
+</ParamField>
+
+<ParamField path="maximumWeight(long maximumWeight)" type="Caffeine<K, V>">
+  Specifies the maximum weight of entries the cache may contain. Requires a corresponding call to `weigher()`. Weight is used to determine eviction eligibility.
+  
+  <Expandable title="parameters">
+    <ResponseField name="maximumWeight" type="long" required>
+      The maximum total weight of entries the cache may contain
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `IllegalArgumentException` - if maximumWeight is negative
+    - `IllegalStateException` - if a maximum weight or size was already set
+  </Expandable>
+  
+  ```java
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .maximumWeight(100_000)
+      .weigher((key, value) -> value.size())
+      .build();
+  ```
+</ParamField>
+
+<ParamField path="weigher(Weigher<K1, V1> weigher)" type="Caffeine<K1, V1>">
+  Specifies the weigher to use in determining the weight of entries. Must be used with `maximumWeight()`.
+  
+  <Expandable title="parameters">
+    <ResponseField name="weigher" type="Weigher<K1, V1>" required>
+      The weigher to use in calculating the weight of cache entries
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `IllegalStateException` - if a weigher was already set
+    - `NullPointerException` - if weigher is null
+  </Expandable>
+  
+  ```java
+  Cache<Key, Graph> cache = Caffeine.newBuilder()
+      .maximumWeight(10_000)
+      .weigher((key, graph) -> graph.vertexCount())
+      .build();
+  ```
+</ParamField>
+
+## Time-Based Expiration
+
+<ParamField path="expireAfterWrite(Duration duration)" type="Caffeine<K, V>">
+  Specifies that entries should be automatically removed once a fixed duration has elapsed after creation or the most recent replacement.
+  
+  <Expandable title="parameters">
+    <ResponseField name="duration" type="Duration" required>
+      The length of time after an entry is created or updated before it should be automatically removed
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `IllegalArgumentException` - if duration is negative
+    - `IllegalStateException` - if expireAfterWrite was already set
+  </Expandable>
+  
+  ```java
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .expireAfterWrite(Duration.ofMinutes(5))
+      .build();
+  ```
+</ParamField>
+
+<ParamField path="expireAfterWrite(long duration, TimeUnit unit)" type="Caffeine<K, V>">
+  Specifies that entries should be automatically removed once a fixed duration has elapsed after creation or the most recent replacement.
+  
+  <Expandable title="parameters">
+    <ResponseField name="duration" type="long" required>
+      The length of time after an entry is created or updated
+    </ResponseField>
+    <ResponseField name="unit" type="TimeUnit" required>
+      The unit that duration is expressed in
+    </ResponseField>
+  </Expandable>
+  
+  ```java
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .expireAfterWrite(5, TimeUnit.MINUTES)
+      .build();
+  ```
+</ParamField>
+
+<ParamField path="expireAfterAccess(Duration duration)" type="Caffeine<K, V>">
+  Specifies that entries should be automatically removed once a fixed duration has elapsed after creation, replacement, or last access.
+  
+  <Expandable title="parameters">
+    <ResponseField name="duration" type="Duration" required>
+      The length of time after an entry is last accessed before it should be automatically removed
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `IllegalArgumentException` - if duration is negative
+    - `IllegalStateException` - if expireAfterAccess was already set
+  </Expandable>
+  
+  ```java
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .expireAfterAccess(Duration.ofMinutes(10))
+      .build();
+  ```
+</ParamField>
+
+<ParamField path="expireAfterAccess(long duration, TimeUnit unit)" type="Caffeine<K, V>">
+  Specifies that entries should be automatically removed once a fixed duration has elapsed after creation, replacement, or last access.
+  
+  <Expandable title="parameters">
+    <ResponseField name="duration" type="long" required>
+      The length of time after an entry is last accessed
+    </ResponseField>
+    <ResponseField name="unit" type="TimeUnit" required>
+      The unit that duration is expressed in
+    </ResponseField>
+  </Expandable>
+  
+  ```java
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .expireAfterAccess(10, TimeUnit.MINUTES)
+      .build();
+  ```
+</ParamField>
+
+<ParamField path="expireAfter(Expiry<K1, V1> expiry)" type="Caffeine<K1, V1>">
+  Specifies that entries should be automatically removed based on variable expiration times calculated by the provided `Expiry` implementation.
+  
+  <Expandable title="parameters">
+    <ResponseField name="expiry" type="Expiry<K1, V1>" required>
+      The expiry to use in calculating the expiration time of cache entries
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `IllegalStateException` - if expiration was already set
+    - `NullPointerException` - if expiry is null
+  </Expandable>
+  
+  ```java
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .expireAfter(new Expiry<Key, Value>() {
+        public long expireAfterCreate(Key key, Value value, long currentTime) {
+          return TimeUnit.SECONDS.toNanos(value.getTtl());
+        }
+        public long expireAfterUpdate(Key key, Value value, long currentTime, long currentDuration) {
+          return currentDuration;
+        }
+        public long expireAfterRead(Key key, Value value, long currentTime, long currentDuration) {
+          return currentDuration;
+        }
+      })
+      .build();
+  ```
+</ParamField>
+
+<ParamField path="refreshAfterWrite(Duration duration)" type="Caffeine<K, V>">
+  Specifies that active entries are eligible for automatic refresh once a fixed duration has elapsed after creation or replacement. Requires a LoadingCache.
+  
+  <Expandable title="parameters">
+    <ResponseField name="duration" type="Duration" required>
+      The length of time after an entry is created that it should be considered stale
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `IllegalArgumentException` - if duration is zero or negative
+    - `IllegalStateException` - if the refresh interval was already set
+  </Expandable>
+  
+  ```java
+  LoadingCache<Key, Value> cache = Caffeine.newBuilder()
+      .refreshAfterWrite(Duration.ofMinutes(1))
+      .build(key -> loadValue(key));
+  ```
+</ParamField>
+
+<ParamField path="refreshAfterWrite(long duration, TimeUnit unit)" type="Caffeine<K, V>">
+  Specifies that active entries are eligible for automatic refresh once a fixed duration has elapsed after creation or replacement.
+  
+  <Expandable title="parameters">
+    <ResponseField name="duration" type="long" required>
+      The length of time after an entry is created
+    </ResponseField>
+    <ResponseField name="unit" type="TimeUnit" required>
+      The unit that duration is expressed in
+    </ResponseField>
+  </Expandable>
+  
+  ```java
+  LoadingCache<Key, Value> cache = Caffeine.newBuilder()
+      .refreshAfterWrite(1, TimeUnit.MINUTES)
+      .build(key -> loadValue(key));
+  ```
+</ParamField>
+
+## Reference-Based Eviction
+
+<ParamField path="weakKeys()" type="Caffeine<K, V>">
+  Specifies that each key should be wrapped in a `WeakReference`. Keys are compared using identity (==) equality.
+  
+  <Expandable title="throws">
+    - `IllegalStateException` - if the key strength was already set
+  </Expandable>
+  
+  ```java
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .weakKeys()
+      .build();
+  ```
+</ParamField>
+
+<ParamField path="weakValues()" type="Caffeine<K, V>">
+  Specifies that each value should be wrapped in a `WeakReference`. Values are compared using identity (==) equality. Cannot be used with AsyncCache.
+  
+  <Expandable title="throws">
+    - `IllegalStateException` - if the value strength was already set
+  </Expandable>
+  
+  ```java
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .weakValues()
+      .build();
+  ```
+</ParamField>
+
+<ParamField path="softValues()" type="Caffeine<K, V>">
+  Specifies that each value should be wrapped in a `SoftReference`. Values are garbage-collected in a globally least-recently-used manner. Cannot be used with AsyncCache.
+  
+  <Expandable title="throws">
+    - `IllegalStateException` - if the value strength was already set
+  </Expandable>
+  
+  ```java
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .softValues()
+      .build();
+  ```
+</ParamField>
+
+## Removal Listeners
+
+<ParamField path="evictionListener(RemovalListener<K1, V1> evictionListener)" type="Caffeine<K1, V1>">
+  Specifies a listener that is notified each time an entry is evicted. The listener is invoked during the atomic operation to remove the entry.
+  
+  <Expandable title="parameters">
+    <ResponseField name="evictionListener" type="RemovalListener<K1, V1>" required>
+      A listener instance that caches notify each time an entry is evicted
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `IllegalStateException` - if a removal listener was already set
+    - `NullPointerException` - if evictionListener is null
+  </Expandable>
+  
+  ```java
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .evictionListener((key, value, cause) -> {
+        System.out.println("Evicted: " + key);
+      })
+      .build();
+  ```
+</ParamField>
+
+<ParamField path="removalListener(RemovalListener<K1, V1> removalListener)" type="Caffeine<K1, V1>">
+  Specifies a listener that is notified each time an entry is removed for any reason. The listener is invoked asynchronously on the configured executor.
+  
+  <Expandable title="parameters">
+    <ResponseField name="removalListener" type="RemovalListener<K1, V1>" required>
+      A listener instance that caches notify each time an entry is removed
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `IllegalStateException` - if a removal listener was already set
+    - `NullPointerException` - if removalListener is null
+  </Expandable>
+  
+  ```java
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .removalListener((key, value, cause) -> {
+        System.out.println("Removed: " + key + ", cause: " + cause);
+      })
+      .build();
+  ```
+</ParamField>
+
+## Statistics
+
+<ParamField path="recordStats()" type="Caffeine<K, V>">
+  Enables the accumulation of `CacheStats` during cache operation. Recording statistics requires bookkeeping with each operation and imposes a performance penalty.
+  
+  <Expandable title="throws">
+    - `IllegalStateException` - if statistics recording was already set
+  </Expandable>
+  
+  ```java
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .recordStats()
+      .build();
+  
+  CacheStats stats = cache.stats();
+  System.out.println("Hit rate: " + stats.hitRate());
+  ```
+</ParamField>
+
+<ParamField path="recordStats(Supplier<StatsCounter> statsCounterSupplier)" type="Caffeine<K, V>">
+  Enables the accumulation of `CacheStats` using a custom `StatsCounter` implementation.
+  
+  <Expandable title="parameters">
+    <ResponseField name="statsCounterSupplier" type="Supplier<StatsCounter>" required>
+      A supplier that returns a new StatsCounter instance
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `IllegalStateException` - if statistics recording was already set
+    - `NullPointerException` - if statsCounterSupplier is null
+  </Expandable>
+  
+  ```java
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .recordStats(() -> new CustomStatsCounter())
+      .build();
+  ```
+</ParamField>
+
+## Execution Control
+
+<ParamField path="executor(Executor executor)" type="Caffeine<K, V>">
+  Specifies the executor to use for asynchronous tasks including removal notifications, asynchronous computations, and periodic maintenance. Defaults to `ForkJoinPool.commonPool()`.
+  
+  <Expandable title="parameters">
+    <ResponseField name="executor" type="Executor" required>
+      The executor to use for asynchronous execution
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `IllegalStateException` - if an executor was already set
+    - `NullPointerException` - if executor is null
+  </Expandable>
+  
+  ```java
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .executor(Executors.newSingleThreadExecutor())
+      .build();
+  ```
+</ParamField>
+
+<ParamField path="scheduler(Scheduler scheduler)" type="Caffeine<K, V>">
+  Specifies the scheduler to use for routine maintenance based on expiration events. Enables prompt removal of expired entries.
+  
+  <Expandable title="parameters">
+    <ResponseField name="scheduler" type="Scheduler" required>
+      The scheduler that submits tasks to the executor after a delay
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `IllegalStateException` - if a scheduler was already set
+    - `NullPointerException` - if scheduler is null
+  </Expandable>
+  
+  ```java
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .expireAfterWrite(Duration.ofMinutes(5))
+      .scheduler(Scheduler.systemScheduler())
+      .build();
+  ```
+</ParamField>
+
+<ParamField path="ticker(Ticker ticker)" type="Caffeine<K, V>">
+  Specifies a nanosecond-precision time source for determining when entries should be expired or refreshed. Defaults to `System.nanoTime()`.
+  
+  <Expandable title="parameters">
+    <ResponseField name="ticker" type="Ticker" required>
+      A nanosecond-precision time source
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `IllegalStateException` - if a ticker was already set
+    - `NullPointerException` - if ticker is null
+  </Expandable>
+  
+  ```java
+  // Primarily for testing
+  Cache<Key, Value> cache = Caffeine.newBuilder()
+      .expireAfterWrite(Duration.ofMinutes(5))
+      .ticker(customTicker)
+      .build();
+  ```
+</ParamField>
+
+## Building Caches
+
+<ParamField path="build()" type="Cache<K1, V1>">
+  Builds a cache which does not automatically load values when keys are requested unless a mapping function is provided.
+  
+  <Expandable title="returns">
+    <ResponseField name="cache" type="Cache<K1, V1>">
+      A cache with the requested features
+    </ResponseField>
+  </Expandable>
+  
+  ```java
+  Cache<String, User> cache = Caffeine.newBuilder()
+      .maximumSize(10_000)
+      .expireAfterWrite(Duration.ofMinutes(10))
+      .build();
+  
+  // Manual loading
+  User user = cache.get(userId, id -> database.getUserById(id));
+  ```
+</ParamField>
+
+<ParamField path="build(CacheLoader<K1, V1> loader)" type="LoadingCache<K1, V1>">
+  Builds a cache that automatically loads values using the supplied `CacheLoader`. If another thread is currently loading a value, this thread waits for that thread to finish.
+  
+  <Expandable title="parameters">
+    <ResponseField name="loader" type="CacheLoader<K1, V1>" required>
+      The cache loader used to obtain new values
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="returns">
+    <ResponseField name="cache" type="LoadingCache<K1, V1>">
+      A loading cache with the requested features
+    </ResponseField>
+  </Expandable>
+  
+  ```java
+  LoadingCache<String, User> cache = Caffeine.newBuilder()
+      .maximumSize(10_000)
+      .expireAfterWrite(Duration.ofMinutes(10))
+      .build(userId -> database.getUserById(userId));
+  
+  // Automatic loading
+  User user = cache.get(userId);
+  ```
+</ParamField>
+
+<ParamField path="buildAsync()" type="AsyncCache<K1, V1>">
+  Builds a cache that stores `CompletableFuture` instances. The cache does not automatically load values unless a mapping function is provided.
+  
+  <Expandable title="returns">
+    <ResponseField name="cache" type="AsyncCache<K1, V1>">
+      An async cache with the requested features
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `IllegalStateException` - if weak/soft values are configured
+  </Expandable>
+  
+  ```java
+  AsyncCache<String, User> cache = Caffeine.newBuilder()
+      .maximumSize(10_000)
+      .expireAfterWrite(Duration.ofMinutes(10))
+      .buildAsync();
+  
+  CompletableFuture<User> future = cache.get(userId, 
+      id -> CompletableFuture.supplyAsync(() -> database.getUserById(id)));
+  ```
+</ParamField>
+
+<ParamField path="buildAsync(CacheLoader<K1, V1> loader)" type="AsyncLoadingCache<K1, V1>">
+  Builds a cache that automatically loads values asynchronously using the supplied `CacheLoader`.
+  
+  <Expandable title="parameters">
+    <ResponseField name="loader" type="CacheLoader<K1, V1>" required>
+      The cache loader used to obtain new values
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="returns">
+    <ResponseField name="cache" type="AsyncLoadingCache<K1, V1>">
+      An async loading cache with the requested features
+    </ResponseField>
+  </Expandable>
+  
+  ```java
+  AsyncLoadingCache<String, User> cache = Caffeine.newBuilder()
+      .maximumSize(10_000)
+      .expireAfterWrite(Duration.ofMinutes(10))
+      .buildAsync(userId -> database.getUserById(userId));
+  
+  CompletableFuture<User> future = cache.get(userId);
+  ```
+</ParamField>
+
+<ParamField path="buildAsync(AsyncCacheLoader<K1, V1> loader)" type="AsyncLoadingCache<K1, V1>">
+  Builds a cache that automatically loads values asynchronously using the supplied `AsyncCacheLoader`.
+  
+  <Expandable title="parameters">
+    <ResponseField name="loader" type="AsyncCacheLoader<K1, V1>" required>
+      The async cache loader used to obtain new values
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="returns">
+    <ResponseField name="cache" type="AsyncLoadingCache<K1, V1>">
+      An async loading cache with the requested features
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `IllegalStateException` - if weak/soft values are configured
+    - `NullPointerException` - if loader is null
+  </Expandable>
+  
+  ```java
+  AsyncLoadingCache<String, User> cache = Caffeine.newBuilder()
+      .maximumSize(10_000)
+      .expireAfterWrite(Duration.ofMinutes(10))
+      .buildAsync((userId, executor) -> 
+          CompletableFuture.supplyAsync(() -> database.getUserById(userId), executor));
+  
+  CompletableFuture<User> future = cache.get(userId);
+  ```
+</ParamField>
+
+## Related APIs
+
+- [Cache](/api/cache) - Manual cache interface
+- [LoadingCache](/api/loading-cache) - Automatically loading cache interface
+- [AsyncCache](/api/async-cache) - Asynchronous cache interface
+- [AsyncLoadingCache](/api/async-loading-cache) - Asynchronous loading cache interface

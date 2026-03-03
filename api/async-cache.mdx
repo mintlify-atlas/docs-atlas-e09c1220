@@ -1,0 +1,439 @@
+---
+title: AsyncCache
+description: A cache that stores CompletableFuture instances for asynchronous value computation and retrieval
+---
+
+The `AsyncCache` interface provides a thread-safe cache where values are represented as `CompletableFuture` instances. This enables asynchronous computation and retrieval of cache values, allowing non-blocking access patterns.
+
+## Overview
+
+`AsyncCache` stores `CompletableFuture` instances rather than direct values, enabling:
+- Non-blocking cache operations
+- Asynchronous value computation
+- Concurrent loading of values
+- Integration with asynchronous APIs
+
+```java
+AsyncCache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .expireAfterWrite(Duration.ofMinutes(10))
+    .buildAsync();
+
+CompletableFuture<User> future = cache.get("user123", 
+    userId -> CompletableFuture.supplyAsync(() -> database.getUserById(userId)));
+```
+
+## Retrieval Methods
+
+<ParamField path="getIfPresent(K key)" type="CompletableFuture<V>">
+  Returns the future associated with the key, or `null` if there is no cached future for the key.
+  
+  <Expandable title="parameters">
+    <ResponseField name="key" type="K" required>
+      The key whose associated value is to be returned
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="returns">
+    <ResponseField name="future" type="CompletableFuture<V>">
+      The future value mapped to the key, or null if no mapping exists
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `NullPointerException` - if the specified key is null
+  </Expandable>
+  
+  ```java
+  AsyncCache<String, Image> cache = Caffeine.newBuilder().buildAsync();
+  
+  CompletableFuture<Image> future = cache.getIfPresent("image123");
+  if (future == null) {
+    // No cached future for this key
+  } else {
+    future.thenAccept(image -> display(image));
+  }
+  ```
+</ParamField>
+
+<ParamField path="get(K key, Function<K, V> mappingFunction)" type="CompletableFuture<V>">
+  Returns the future associated with the key, obtaining that value from the mapping function if necessary. The function computes the value synchronously, which is then wrapped in a CompletableFuture.
+  
+  <Expandable title="parameters">
+    <ResponseField name="key" type="K" required>
+      The key with which the value is to be associated
+    </ResponseField>
+    <ResponseField name="mappingFunction" type="Function<K, V>" required>
+      The function to asynchronously compute a value
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="returns">
+    <ResponseField name="future" type="CompletableFuture<V>">
+      The current (existing or computed) future value associated with the key
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `NullPointerException` - if the key or mappingFunction is null
+  </Expandable>
+  
+  <Expandable title="info">
+    If the asynchronous computation fails, the entry will be automatically removed from the cache.
+  </Expandable>
+  
+  ```java
+  AsyncCache<String, User> cache = Caffeine.newBuilder()
+      .maximumSize(10_000)
+      .buildAsync();
+  
+  CompletableFuture<User> userFuture = cache.get("user123", userId -> {
+      // Synchronous computation wrapped in future
+      return database.getUserById(userId);
+  });
+  
+  userFuture.thenAccept(user -> {
+      System.out.println("User loaded: " + user.getName());
+  });
+  ```
+</ParamField>
+
+<ParamField path="get(K key, BiFunction<K, Executor, CompletableFuture<V>> mappingFunction)" type="CompletableFuture<V>">
+  Returns the future associated with the key, obtaining that value from the mapping function if necessary. The function returns a CompletableFuture directly, allowing full control over asynchronous computation.
+  
+  <Expandable title="parameters">
+    <ResponseField name="key" type="K" required>
+      The key with which the value is to be associated
+    </ResponseField>
+    <ResponseField name="mappingFunction" type="BiFunction<K, Executor, CompletableFuture<V>>" required>
+      The function to asynchronously compute a value, optionally using the given executor
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="returns">
+    <ResponseField name="future" type="CompletableFuture<V>">
+      The current (existing or computed) future value associated with the key
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `NullPointerException` - if the key, mappingFunction, or returned future is null
+    - `RuntimeException` or `Error` - if the mappingFunction throws when constructing the future
+  </Expandable>
+  
+  ```java
+  AsyncCache<String, Document> cache = Caffeine.newBuilder()
+      .maximumSize(1000)
+      .buildAsync();
+  
+  CompletableFuture<Document> docFuture = cache.get("doc123", (docId, executor) -> {
+      // Full control over asynchronous computation
+      return CompletableFuture.supplyAsync(() -> {
+          Document doc = loadDocument(docId);
+          processDocument(doc);
+          return doc;
+      }, executor);
+  });
+  ```
+</ParamField>
+
+<ParamField path="getAll(Iterable<K> keys, Function<Set<K>, Map<K, V>> mappingFunction)" type="CompletableFuture<Map<K, V>>">
+  Returns a future of a map containing the values associated with the keys, creating or retrieving those values if necessary. Uses synchronous loading function.
+  
+  <Expandable title="parameters">
+    <ResponseField name="keys" type="Iterable<K>" required>
+      The keys whose associated values are to be returned
+    </ResponseField>
+    <ResponseField name="mappingFunction" type="Function<Set<K>, Map<K, V>>" required>
+      The function to asynchronously compute the values
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="returns">
+    <ResponseField name="future" type="CompletableFuture<Map<K, V>>">
+      A future containing an unmodifiable mapping of keys to values
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `NullPointerException` - if the collection is null, contains null, or the future is null
+    - `RuntimeException` or `Error` - if the mappingFunction throws
+  </Expandable>
+  
+  ```java
+  AsyncCache<String, User> cache = Caffeine.newBuilder().buildAsync();
+  
+  List<String> userIds = Arrays.asList("user1", "user2", "user3");
+  
+  CompletableFuture<Map<String, User>> futureMap = cache.getAll(userIds, missingIds -> {
+      // Synchronous bulk load
+      return database.getUsersByIds(missingIds);
+  });
+  
+  futureMap.thenAccept(users -> {
+      System.out.println("Loaded " + users.size() + " users");
+  });
+  ```
+</ParamField>
+
+<ParamField path="getAll(Iterable<K> keys, BiFunction<Set<K>, Executor, CompletableFuture<Map<K, V>>> mappingFunction)" type="CompletableFuture<Map<K, V>>">
+  Returns a future of a map containing the values associated with the keys, creating or retrieving those values if necessary. Uses asynchronous loading function for full control.
+  
+  <Expandable title="parameters">
+    <ResponseField name="keys" type="Iterable<K>" required>
+      The keys whose associated values are to be returned
+    </ResponseField>
+    <ResponseField name="mappingFunction" type="BiFunction<Set<K>, Executor, CompletableFuture<Map<K, V>>>" required>
+      The function to asynchronously compute the values using the given executor
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="returns">
+    <ResponseField name="future" type="CompletableFuture<Map<K, V>>">
+      A future containing an unmodifiable mapping of keys to values
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `NullPointerException` - if the collection is null, contains null, or the future is null
+    - `RuntimeException` or `Error` - if the mappingFunction throws
+  </Expandable>
+  
+  ```java
+  AsyncCache<String, Product> cache = Caffeine.newBuilder().buildAsync();
+  
+  List<String> productIds = Arrays.asList("p1", "p2", "p3");
+  
+  CompletableFuture<Map<String, Product>> futureMap = 
+      cache.getAll(productIds, (missingIds, executor) -> {
+          return CompletableFuture.supplyAsync(() -> {
+              return api.getProducts(missingIds);
+          }, executor);
+      });
+  ```
+</ParamField>
+
+## Modification Methods
+
+<ParamField path="put(K key, CompletableFuture<V> valueFuture)" type="void">
+  Associates the future value with the key in this cache. If the cache previously contained a value for the key, the old value is replaced. If the asynchronous computation fails, the entry will be automatically removed.
+  
+  <Expandable title="parameters">
+    <ResponseField name="key" type="K" required>
+      The key with which the value is to be associated
+    </ResponseField>
+    <ResponseField name="valueFuture" type="CompletableFuture<V>" required>
+      The future value to be associated with the key
+    </ResponseField>
+  </Expandable>
+  
+  <Expandable title="throws">
+    - `NullPointerException` - if the specified key or value is null
+  </Expandable>
+  
+  ```java
+  AsyncCache<String, Report> cache = Caffeine.newBuilder().buildAsync();
+  
+  CompletableFuture<Report> reportFuture = CompletableFuture.supplyAsync(() -> {
+      return generateReport("monthly");
+  });
+  
+  cache.put("report-monthly", reportFuture);
+  ```
+</ParamField>
+
+## Views and Synchronous Access
+
+<ParamField path="asMap()" type="ConcurrentMap<K, CompletableFuture<V>>">
+  Returns a thread-safe view of the entries stored in this cache as a map of futures. Modifications made to the map directly affect the cache.
+  
+  <Expandable title="returns">
+    <ResponseField name="map" type="ConcurrentMap<K, CompletableFuture<V>>">
+      A thread-safe view supporting all optional Map operations
+    </ResponseField>
+  </Expandable>
+  
+  ```java
+  AsyncCache<String, Config> cache = Caffeine.newBuilder().buildAsync();
+  
+  ConcurrentMap<String, CompletableFuture<Config>> map = cache.asMap();
+  
+  // Direct map operations
+  map.forEach((key, future) -> {
+      future.thenAccept(config -> {
+          System.out.println(key + ": " + config);
+      });
+  });
+  ```
+</ParamField>
+
+<ParamField path="synchronous()" type="Cache<K, V>">
+  Returns a view of the entries stored in this cache as a synchronous `Cache`. A mapping is not present if the value is currently being loaded. Modifications to the synchronous cache directly affect the asynchronous cache.
+  
+  <Expandable title="returns">
+    <ResponseField name="cache" type="Cache<K, V>">
+      A thread-safe synchronous view of this cache
+    </ResponseField>
+  </Expandable>
+  
+  ```java
+  AsyncCache<String, User> asyncCache = Caffeine.newBuilder()
+      .maximumSize(10_000)
+      .buildAsync();
+  
+  // Get synchronous view
+  Cache<String, User> syncCache = asyncCache.synchronous();
+  
+  // Use synchronous operations
+  User user = syncCache.getIfPresent("user123");
+  syncCache.put("user456", new User("Jane"));
+  ```
+</ParamField>
+
+## Usage Examples
+
+### Basic Async Operations
+
+```java
+AsyncCache<String, Image> imageCache = Caffeine.newBuilder()
+    .maximumSize(1000)
+    .expireAfterAccess(Duration.ofMinutes(10))
+    .buildAsync();
+
+// Asynchronous loading
+CompletableFuture<Image> imageFuture = imageCache.get("photo.jpg", imageId -> {
+    return loadImageFromDisk(imageId);
+});
+
+imageFuture.thenAccept(image -> {
+    displayImage(image);
+}).exceptionally(ex -> {
+    System.err.println("Failed to load image: " + ex.getMessage());
+    return null;
+});
+```
+
+### With Executor Control
+
+```java
+ExecutorService customExecutor = Executors.newFixedThreadPool(4);
+
+AsyncCache<String, Report> reportCache = Caffeine.newBuilder()
+    .maximumSize(100)
+    .executor(customExecutor)
+    .buildAsync();
+
+CompletableFuture<Report> reportFuture = reportCache.get("sales-2024", 
+    (reportId, executor) -> {
+        return CompletableFuture.supplyAsync(() -> {
+            // Long-running computation
+            return generateSalesReport(reportId);
+        }, executor);
+    });
+```
+
+### Bulk Async Loading
+
+```java
+AsyncCache<String, Product> productCache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .buildAsync();
+
+List<String> productIds = getProductIdsFromCart();
+
+CompletableFuture<Map<String, Product>> productsFuture = 
+    productCache.getAll(productIds, (missingIds, executor) -> {
+        return CompletableFuture.supplyAsync(() -> {
+            // Bulk API call
+            return productApi.getProductsBatch(missingIds);
+        }, executor);
+    });
+
+productsFuture.thenAccept(products -> {
+    double totalPrice = products.values().stream()
+        .mapToDouble(Product::getPrice)
+        .sum();
+    System.out.println("Total: $" + totalPrice);
+});
+```
+
+### Chaining Async Operations
+
+```java
+AsyncCache<String, User> userCache = Caffeine.newBuilder()
+    .maximumSize(5000)
+    .buildAsync();
+
+AsyncCache<String, UserProfile> profileCache = Caffeine.newBuilder()
+    .maximumSize(5000)
+    .buildAsync();
+
+// Chain cache lookups
+CompletableFuture<UserProfile> profileFuture = 
+    userCache.get("user123", userId -> loadUser(userId))
+        .thenCompose(user -> 
+            profileCache.get(user.getProfileId(), 
+                profileId -> loadProfile(profileId)));
+
+profileFuture.thenAccept(profile -> {
+    renderProfile(profile);
+});
+```
+
+### Error Handling
+
+```java
+AsyncCache<String, Document> docCache = Caffeine.newBuilder()
+    .maximumSize(500)
+    .buildAsync();
+
+CompletableFuture<Document> docFuture = docCache.get("doc123", 
+    (docId, executor) -> {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return documentService.load(docId);
+            } catch (DocumentNotFoundException e) {
+                throw new CompletionException(e);
+            }
+        }, executor);
+    });
+
+docFuture
+    .thenAccept(doc -> processDocument(doc))
+    .exceptionally(ex -> {
+        if (ex.getCause() instanceof DocumentNotFoundException) {
+            System.err.println("Document not found");
+        } else {
+            System.err.println("Error loading document: " + ex.getMessage());
+        }
+        return null;
+    });
+```
+
+### Mixed Sync/Async Access
+
+```java
+AsyncCache<String, Config> asyncCache = Caffeine.newBuilder()
+    .maximumSize(100)
+    .buildAsync();
+
+// Asynchronous access
+CompletableFuture<Config> asyncConfig = asyncCache.get("app.config", 
+    key -> loadConfigAsync(key));
+
+// Get synchronous view for blocking operations
+Cache<String, Config> syncCache = asyncCache.synchronous();
+
+// Blocking access when needed
+Config config = syncCache.getIfPresent("app.config");
+if (config != null) {
+    applyConfig(config);
+}
+```
+
+## Related APIs
+
+- [Caffeine](/api/caffeine) - Builder for creating cache instances
+- [AsyncLoadingCache](/api/async-loading-cache) - Async cache with automatic loading
+- [Cache](/api/cache) - Synchronous cache interface
+- [CompletableFuture](https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/util/concurrent/CompletableFuture.html) - Java async computation

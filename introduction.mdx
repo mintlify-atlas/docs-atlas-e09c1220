@@ -1,0 +1,133 @@
+---
+title: Introduction
+description: Caffeine is a high performance, near optimal caching library for Java based on Google Guava's cache design
+---
+
+Caffeine is a [high performance](https://github.com/ben-manes/caffeine/wiki/Benchmarks), [near optimal](https://github.com/ben-manes/caffeine/wiki/Efficiency) in-memory caching library for Java. It provides an API inspired by Google Guava's cache with improvements drawn from experience designing Guava's cache and ConcurrentLinkedHashMap.
+
+## Why Caffeine?
+
+Caffeine offers exceptional performance through advanced eviction algorithms and concurrent design:
+
+- **High performance**: Superior throughput and hit rates compared to traditional caching solutions
+- **Near optimal eviction**: Uses the W-TinyLFU algorithm for frequency and recency-based eviction
+- **Flexible configuration**: Mix and match features to build exactly the cache you need
+- **Production ready**: Powers infrastructure at Cassandra, Kafka, HBase, Apache Solr, and many more
+
+<CodeGroup>
+```java Basic cache
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+
+Cache<String, String> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .build();
+
+// Add to cache
+cache.put("key", "value");
+
+// Retrieve from cache
+String value = cache.getIfPresent("key");
+```
+
+```java Loading cache
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.LoadingCache;
+import java.time.Duration;
+
+LoadingCache<String, Graph> graphs = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .expireAfterWrite(Duration.ofMinutes(5))
+    .refreshAfterWrite(Duration.ofMinutes(1))
+    .build(key -> createExpensiveGraph(key));
+
+// Automatically loads if not present
+Graph graph = graphs.get("key");
+```
+</CodeGroup>
+
+## Get started
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Add Caffeine to your Java project with Maven, Gradle, or manual download
+  </Card>
+  
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first cache in minutes with step-by-step examples
+  </Card>
+  
+  <Card title="Core concepts" icon="book" href="/core/population">
+    Learn about cache types, eviction policies, and configuration options
+  </Card>
+  
+  <Card title="API reference" icon="code" href="/api/caffeine">
+    Explore the complete API documentation and advanced features
+  </Card>
+</CardGroup>
+
+## Features at a glance
+
+Caffeine provides flexible construction to create a cache with any combination of these optional features:
+
+### Population strategies
+
+- **Manual loading**: Explicitly add entries with `put()` and retrieve with `getIfPresent()`
+- **Automatic loading**: Cache automatically loads missing entries using a `CacheLoader`
+- **Async loading**: Load entries asynchronously with `AsyncCache` and `AsyncLoadingCache`
+
+### Eviction policies
+
+- **Size-based eviction**: Limit cache size by entry count or total weight
+- **Time-based expiration**: Expire entries after access or write
+- **Custom expiration**: Define per-entry expiration with the `Expiry` interface
+- **Reference-based eviction**: Use weak or soft references for keys and values
+
+### Performance features
+
+- **Refresh**: Asynchronously refresh stale entries to keep cache warm
+- **Statistics**: Track hit rate, miss rate, eviction count, and load times
+- **Write-through**: Propagate writes to an external data source
+- **Removal listeners**: Get notified when entries are evicted or removed
+
+### Extensions
+
+- **JSR-107 JCache**: Standard Java caching API compatibility
+- **Guava adapters**: Drop-in replacement for Guava's cache
+- **Simulator**: Test and tune cache configurations
+
+## Key characteristics
+
+<Note>
+Caffeine is implemented as a concurrent hash table with performance characteristics similar to `ConcurrentHashMap`. It uses weakly consistent iterators that are safe for concurrent use and never throw `ConcurrentModificationException`.
+</Note>
+
+**Thread safety**: All cache implementations are thread-safe and can be safely accessed by multiple concurrent threads without external synchronization.
+
+**Null handling**: Caffeine does not store null values. A cache with a nullable value type can return null, but null values are never stored internally.
+
+**Identity vs equality**: By default, caches use `equals()` for key and value comparisons. When weak references are enabled, identity (`==`) comparisons are used instead.
+
+## Real-world usage
+
+Caffeine powers critical infrastructure across the industry:
+
+- **Distributed systems**: Cassandra, Kafka, HBase, Accumulo
+- **Search and analytics**: Apache Solr, Druid, Neo4j
+- **Data grids**: Coherence, Infinispan, Redisson
+- **Web frameworks**: Spring Cache, Play Framework, Micronaut, Quarkus
+- **Cloud platforms**: OpenWhisk serverless platform
+
+## Next steps
+
+Ready to add high-performance caching to your application?
+
+<CardGroup cols={2}>
+  <Card title="Install Caffeine" icon="download" href="/installation">
+    Get started with Maven, Gradle, or direct JAR download
+  </Card>
+  
+  <Card title="Quick start guide" icon="rocket" href="/quickstart">
+    Build a working cache in under 5 minutes
+  </Card>
+</CardGroup>

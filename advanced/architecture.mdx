@@ -1,0 +1,240 @@
+---
+title: Internal Architecture
+description: Deep dive into Caffeine's internal design and implementation
+---
+
+Caffeine is built on a sophisticated architecture that balances performance, memory efficiency, and correctness. This guide explores the internal design decisions that make Caffeine one of the fastest caching libraries available.
+
+## Core Design Principles
+
+Caffeine's architecture is based on several key principles:
+
+- **Lock-free reads**: Read operations never block, ensuring maximum throughput
+- **Buffered writes**: Updates are batched to minimize lock contention
+- **Adaptive eviction**: The cache adjusts its behavior based on workload patterns
+- **Zero overhead**: Only pay for features you use through code generation
+
+## High-Level Architecture
+
+<Info>
+Caffeine is built on top of `ConcurrentHashMap` with added page-replacement algorithms for intelligent eviction.
+</Info>
+
+The cache consists of three main layers:
+
+1. **Hash table layer** - Fast concurrent access using `ConcurrentHashMap`
+2. **Policy layer** - Eviction and expiration policies
+3. **Buffer layer** - Asynchronous processing of cache events
+
+### Concurrency Model
+
+Caffeine uses a best-effort bounding approach to maintain eventual consistency:
+
+```java
+// Read operations are lock-free
+V value = cache.get(key);
+
+// Writes are recorded in buffers
+cache.put(key, value);
+// The policy is updated asynchronously
+```
+
+<Note>
+The penalty of applying policy updates is amortized across threads, making the cost only slightly higher than a plain `ConcurrentHashMap` operation.
+</Note>
+
+## Buffer System
+
+Reads and writes are recorded in lock-free buffers that are drained asynchronously:
+
+<Accordion title="Read Buffer">
+  - Ring buffer that records cache accesses
+  - Rejects additions if contended or full
+  - Drained when full or during write operations
+  - Ensures minimal impact on read latency
+</Accordion>
+
+<Accordion title="Write Buffer">
+  - Bounded queue of cache mutations
+  - Processed in batches to reduce lock contention
+  - Uses a state machine to schedule draining
+  - Maintains ordering guarantees for writes
+</Accordion>
+
+### Drain State Machine
+
+The buffer draining process uses a state machine to coordinate work:
+
+```
+IDLE → REQUIRED → PROCESSING → IDLE
+```
+
+- **IDLE**: No work pending
+- **REQUIRED**: Drain needed but not started
+- **PROCESSING**: Currently draining buffers
+
+## Entry State Model
+
+Each cache entry has a lifecycle encoded in its key field to avoid additional memory overhead:
+
+<Tabs>
+  <Tab title="Alive">
+    Entry exists in both the hash table and the eviction policy. This is the normal state for active entries.
+    
+    ```java
+    // Entry is alive and accessible
+    node.key != null && map.containsKey(key)
+    ```
+  </Tab>
+  
+  <Tab title="Retired">
+    Entry has been removed from the hash table but is still in the policy data structures, pending cleanup.
+    
+    ```java
+    // Entry is retired - marked for removal
+    node.key == RETIRED_STRONG_KEY
+    ```
+  </Tab>
+  
+  <Tab title="Dead">
+    Entry has been removed from both the hash table and the policy. Memory can be reclaimed.
+    
+    ```java
+    // Entry is fully removed
+    node.key == DEAD_STRONG_KEY
+    ```
+  </Tab>
+</Tabs>
+
+## Code Generation
+
+Caffeine uses code generation to eliminate the overhead of unused features:
+
+<Info>
+The `BoundedLocalCache` class is abstract, and concrete implementations are generated at build time based on the feature combinations you configure.
+</Info>
+
+### Feature Matrix
+
+The code generator creates specialized classes for combinations of:
+
+- Maximum size (yes/no)
+- Expiration after write (yes/no)
+- Expiration after access (yes/no)
+- Variable expiration (yes/no)
+- Reference types (strong/weak/soft)
+- Removal listener (yes/no)
+
+This ensures that:
+- Only necessary fields are allocated
+- Only required code paths are executed
+- JIT compiler can aggressively optimize
+
+```java
+// Example generated class name
+class BoundedLocalCache$SS extends BoundedLocalCache<K, V> {
+  // SS = Strong keys, Strong values
+  // Only includes fields for configured features
+}
+```
+
+## Memory Layout
+
+Caffeine is optimized for modern CPU cache architectures:
+
+### Node Structure
+
+```java
+public class Node<K, V> {
+  K key;              // 8 bytes (reference)
+  V value;            // 8 bytes (reference)
+  int weight;         // 4 bytes
+  int policyWeight;   // 4 bytes
+  Node<K, V> prev;    // 8 bytes (reference)
+  Node<K, V> next;    // 8 bytes (reference)
+  // Additional fields only if needed
+}
+```
+
+<Note>
+Nodes are sized to fit within cache lines (64 bytes) to minimize memory access costs.
+</Note>
+
+### Cache Line Optimization
+
+The `FrequencySketch` constrains counters to 64-byte blocks (L1 cache line size):
+
+- Improves spatial locality
+- Reduces memory access latency
+- Leverages L2 spatial prefetcher
+- Typical cost is only one memory access
+
+## Maintenance Operations
+
+The cache performs periodic maintenance asynchronously:
+
+<Accordion title="Eviction Processing">
+  1. Drain read buffer to update access order
+  2. Drain write buffer to process mutations
+  3. Update eviction policy data structures
+  4. Evict entries if over maximum size
+  5. Notify removal listeners
+</Accordion>
+
+<Accordion title="Expiration Processing">
+  1. Check oldest entries in expiration queues
+  2. Remove expired entries
+  3. Update timer wheel (for variable expiration)
+  4. Schedule next expiration check
+</Accordion>
+
+<Accordion title="Reference Cleanup">
+  1. Process reference queue for GC'd entries
+  2. Remove collected keys/values from cache
+  3. Update size and policy state
+  4. Trigger eviction if needed
+</Accordion>
+
+## Performance Characteristics
+
+| Operation | Time Complexity | Notes |
+|-----------|----------------|-------|
+| get() | O(1) | Lock-free, hash table lookup |
+| put() | O(1) amortized | Includes buffered policy update |
+| Eviction | O(1) amortized | Window TinyLFU with constant factors |
+| Expiration | O(1) | Queue peek or timer wheel |
+| Removal | O(1) amortized | Buffered processing |
+
+<Note>
+All operations have constant time complexity with small constant factors, making Caffeine extremely efficient even under high load.
+</Note>
+
+## Thread Safety
+
+Caffeine provides strong thread-safety guarantees:
+
+- All cache operations are thread-safe
+- Reads never block other operations
+- Writes use fine-grained locking
+- Removal listeners are called once per entry
+- Iterators are weakly consistent
+
+## Further Reading
+
+<CardGroup cols={2}>
+  <Card title="Design Articles" icon="newspaper" href="https://highscalability.com/blog/2016/1/25/design-of-a-modern-cache.html">
+    In-depth architectural discussion by the creator
+  </Card>
+  
+  <Card title="BP-Wrapper Paper" icon="file-pdf" href="https://web.njit.edu/~dingxn/papers/BP-Wrapper.pdf">
+    Framework for lock contention-free algorithms
+  </Card>
+  
+  <Card title="Source Code" icon="code" href="https://github.com/ben-manes/caffeine">
+    Explore the implementation on GitHub
+  </Card>
+  
+  <Card title="Efficiency Details" icon="gauge-high" href="/advanced/efficiency">
+    Learn about the W-TinyLFU eviction policy
+  </Card>
+</CardGroup>

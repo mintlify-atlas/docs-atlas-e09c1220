@@ -1,0 +1,424 @@
+---
+title: Refresh
+description: Keep the cache populated with fresh data through asynchronous automatic refresh
+---
+
+Caffeine can automatically refresh cache entries before they expire, ensuring fresh data with minimal disruption to cache availability.
+
+## Automatic refresh
+
+Configure the cache to reload entries asynchronously after a specified duration.
+
+### Basic refresh
+
+```java
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.LoadingCache;
+import java.time.Duration;
+
+LoadingCache<String, User> cache = Caffeine.newBuilder()
+    .refreshAfterWrite(Duration.ofMinutes(5))
+    .build(key -> database.loadUser(key));
+```
+
+With time units:
+
+```java
+import java.util.concurrent.TimeUnit;
+
+LoadingCache<String, User> cache = Caffeine.newBuilder()
+    .refreshAfterWrite(5, TimeUnit.MINUTES)
+    .build(key -> database.loadUser(key));
+```
+
+Reference: Caffeine.java:829, Caffeine.java:857
+
+<Note>
+The duration must be positive. Unlike expiration times, refresh durations cannot be zero.
+</Note>
+
+## How refresh works
+
+Understand the refresh lifecycle and behavior.
+
+### Refresh trigger
+
+Refresh occurs when:
+1. An entry becomes stale (duration has elapsed since creation or last refresh)
+2. The first request for that stale entry arrives
+3. The refresh starts asynchronously
+
+```java
+LoadingCache<String, Data> cache = Caffeine.newBuilder()
+    .refreshAfterWrite(Duration.ofMinutes(5))
+    .build(key -> fetchData(key));
+
+cache.put("key", data);
+
+// After 5 minutes, entry is stale but still in cache
+Thread.sleep(Duration.ofMinutes(6));
+
+// First access after staleness triggers refresh
+Data result = cache.get("key"); // Returns old value immediately
+                                 // Refresh happens in background
+```
+
+### During refresh
+
+While refresh is in progress:
+- The old value continues to be returned
+- Subsequent requests for the same key do not trigger additional refreshes
+- The cache remains available (no blocking)
+
+<CodeGroup>
+```java Successful refresh
+LoadingCache<String, User> cache = Caffeine.newBuilder()
+    .refreshAfterWrite(Duration.ofMinutes(5))
+    .build(key -> database.loadUser(key));
+
+// Old value returned while refreshing
+User user = cache.get("user123");
+
+// After refresh completes, new value is available
+Thread.sleep(100); // Wait for refresh
+User freshUser = cache.get("user123");
+```
+
+```java Failed refresh
+LoadingCache<String, User> cache = Caffeine.newBuilder()
+    .refreshAfterWrite(Duration.ofMinutes(5))
+    .build(key -> {
+        if (database.isDown()) {
+            throw new DatabaseException();
+        }
+        return database.loadUser(key);
+    });
+
+// If refresh fails, old value is retained
+User user = cache.get("user123"); // Returns old value
+// Exception is logged but swallowed
+```
+</CodeGroup>
+
+<Warning>
+All exceptions thrown during refresh are logged (via `System.Logger`) and swallowed. The old value remains in the cache.
+</Warning>
+
+Reference: LoadingCache.java:99
+
+## Custom reload logic
+
+Override the reload behavior for more control.
+
+### Reload method
+
+Implement custom reload logic in your `CacheLoader`:
+
+```java
+import com.github.benmanes.caffeine.cache.CacheLoader;
+
+CacheLoader<String, Document> loader = new CacheLoader<>() {
+    @Override
+    public Document load(String key) throws Exception {
+        return repository.loadDocument(key);
+    }
+    
+    @Override
+    public Document reload(String key, Document oldValue) throws Exception {
+        // Only reload if document has changed
+        if (repository.hasChanged(key, oldValue.getVersion())) {
+            return repository.loadDocument(key);
+        }
+        // Return old value to skip reload
+        return oldValue;
+    }
+};
+
+LoadingCache<String, Document> cache = Caffeine.newBuilder()
+    .refreshAfterWrite(Duration.ofMinutes(5))
+    .build(loader);
+```
+
+Reference: CacheLoader.java:180
+
+<Note>
+Returning the old value from `reload()` effectively skips the refresh and keeps the existing entry.
+</Note>
+
+### Asynchronous reload
+
+Implement async reload for non-blocking I/O:
+
+```java
+import com.github.benmanes.caffeine.cache.AsyncCacheLoader;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+
+AsyncCacheLoader<String, User> loader = new AsyncCacheLoader<>() {
+    @Override
+    public CompletableFuture<User> asyncLoad(
+            String key, Executor executor) {
+        return CompletableFuture.supplyAsync(
+            () -> database.loadUser(key),
+            executor
+        );
+    }
+    
+    @Override
+    public CompletableFuture<User> asyncReload(
+            String key, User oldValue, Executor executor) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return database.loadUser(key);
+            } catch (Exception e) {
+                // Return old value on error
+                return oldValue;
+            }
+        }, executor);
+    }
+};
+
+AsyncLoadingCache<String, User> cache = Caffeine.newBuilder()
+    .refreshAfterWrite(Duration.ofMinutes(5))
+    .buildAsync(loader);
+```
+
+Reference: CacheLoader.java:202
+
+## Manual refresh
+
+Trigger refresh explicitly without waiting for staleness.
+
+### Refresh method
+
+```java
+import java.util.concurrent.CompletableFuture;
+
+LoadingCache<String, User> cache = Caffeine.newBuilder()
+    .build(key -> database.loadUser(key));
+
+// Explicitly refresh an entry
+CompletableFuture<User> future = cache.refresh("user123");
+
+// Wait for refresh to complete
+User freshUser = future.join();
+```
+
+Reference: LoadingCache.java:116
+
+<Note>
+Manual refresh returns a `CompletableFuture`. While refreshing, the old value continues to be returned by `get()`.
+</Note>
+
+### Bulk refresh
+
+Refresh multiple entries at once:
+
+```java
+import java.util.Set;
+import java.util.Map;
+
+// Refresh multiple entries
+Set<String> keys = Set.of("user1", "user2", "user3");
+CompletableFuture<Map<String, User>> future = cache.refreshAll(keys);
+
+// Process results
+future.thenAccept(users -> {
+    users.forEach((key, user) -> 
+        System.out.println(key + ": " + user.getName())
+    );
+});
+```
+
+Reference: LoadingCache.java:135
+
+## Refresh policy operations
+
+Inspect and modify refresh settings at runtime.
+
+### Access refresh policy
+
+```java
+LoadingCache<String, Document> cache = Caffeine.newBuilder()
+    .refreshAfterWrite(Duration.ofMinutes(5))
+    .build(key -> repository.loadDocument(key));
+
+cache.policy().refreshAfterWrite().ifPresent(refresh -> {
+    // Get current refresh duration
+    Duration duration = refresh.getRefreshesAfter();
+    System.out.println("Refreshes after: " + duration);
+    
+    // Change refresh duration at runtime
+    refresh.setRefreshesAfter(Duration.ofMinutes(10));
+    
+    // Get age of entry (time since last refresh)
+    refresh.ageOf("doc123").ifPresent(age -> 
+        System.out.println("Age: " + age)
+    );
+});
+```
+
+Reference: Policy.java:830, Policy.java:853
+
+## Combining refresh with expiration
+
+Use refresh and expiration together for optimal freshness and availability.
+
+### Refresh before expiration
+
+```java
+LoadingCache<String, Token> cache = Caffeine.newBuilder()
+    .expireAfterWrite(Duration.ofMinutes(60))  // Hard deadline
+    .refreshAfterWrite(Duration.ofMinutes(50)) // Refresh before expiration
+    .build(key -> authService.refreshToken(key));
+```
+
+This pattern ensures:
+- Entries are refreshed 10 minutes before they expire
+- If refresh fails, the entry remains valid for 10 more minutes
+- Expired entries are eventually removed
+
+<Note>
+Refresh does not prevent expiration. Set `expireAfterWrite` longer than `refreshAfterWrite` to maintain availability during refresh failures.
+</Note>
+
+### Access-based refresh
+
+Combine with access expiration to refresh only active entries:
+
+```java
+LoadingCache<String, Session> cache = Caffeine.newBuilder()
+    .expireAfterAccess(Duration.ofHours(2))   // Remove inactive sessions
+    .refreshAfterWrite(Duration.ofMinutes(30)) // Refresh active sessions
+    .build(key -> sessionStore.loadSession(key));
+```
+
+## Executor configuration
+
+Control where refresh operations execute.
+
+### Custom executor
+
+```java
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+
+Executor executor = Executors.newFixedThreadPool(4);
+
+LoadingCache<String, Data> cache = Caffeine.newBuilder()
+    .refreshAfterWrite(Duration.ofMinutes(5))
+    .executor(executor) // Used for refresh operations
+    .build(key -> expensiveLoad(key));
+```
+
+Reference: Caffeine.java:361
+
+<Note>
+By default, refresh operations use `ForkJoinPool.commonPool()`. Configure a custom executor to control thread pools and resource usage.
+</Note>
+
+### Synchronous executor for testing
+
+```java
+LoadingCache<String, Data> cache = Caffeine.newBuilder()
+    .refreshAfterWrite(Duration.ofMinutes(5))
+    .executor(Runnable::run) // Runs in calling thread
+    .build(key -> loadData(key));
+
+// Useful for deterministic testing
+cache.put("key", oldData);
+CompletableFuture<Data> future = cache.refresh("key");
+assertEquals(newData, future.get()); // Completes synchronously
+```
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Choose appropriate refresh intervals">
+    - Set refresh shorter than expiration to maintain availability
+    - Balance freshness needs against backend load
+    - Consider data change frequency when setting intervals
+    - Use longer refresh times for expensive operations
+  </Accordion>
+
+  <Accordion title="Handle refresh failures gracefully">
+    - Implement fallback logic in `reload()` to return old values
+    - Log refresh failures for monitoring
+    - Set expiration longer than refresh to allow retry attempts
+    - Consider circuit breakers for external services
+  </Accordion>
+
+  <Accordion title="Optimize reload operations">
+    - Check if reload is necessary (e.g., via ETags or versions)
+    - Return the old value to skip unnecessary reloads
+    - Use async reload for I/O-bound operations
+    - Implement efficient bulk reload for related entries
+  </Accordion>
+
+  <Accordion title="Monitor refresh behavior">
+    - Track refresh success/failure rates
+    - Monitor time spent in refresh operations
+    - Watch for refresh storms (many refreshes at once)
+    - Use manual refresh for controlled updates
+  </Accordion>
+</AccordionGroup>
+
+## Common patterns
+
+<Tabs>
+  <Tab title="Conditional refresh">
+    ```java
+    CacheLoader<String, Document> loader = new CacheLoader<>() {
+        @Override
+        public Document load(String key) throws Exception {
+            return repository.load(key);
+        }
+        
+        @Override
+        public Document reload(String key, Document old) throws Exception {
+            String etag = repository.getETag(key);
+            if (etag.equals(old.getETag())) {
+                return old; // Skip reload if unchanged
+            }
+            return repository.load(key);
+        }
+    };
+    ```
+  </Tab>
+  
+  <Tab title="Graceful degradation">
+    ```java
+    CacheLoader<String, Data> loader = key -> {
+        try {
+            return primary.load(key);
+        } catch (Exception e) {
+            // Fall back to cached value or secondary source
+            Data cached = cache.getIfPresent(key);
+            if (cached != null) return cached;
+            return secondary.load(key);
+        }
+    };
+    ```
+  </Tab>
+  
+  <Tab title="Scheduled refresh">
+    ```java
+    ScheduledExecutorService scheduler = 
+        Executors.newScheduledThreadPool(1);
+    
+    LoadingCache<String, Data> cache = Caffeine.newBuilder()
+        .build(key -> load(key));
+    
+    // Refresh specific keys on schedule
+    scheduler.scheduleAtFixedRate(() -> {
+        criticalKeys.forEach(cache::refresh);
+    }, 0, 5, TimeUnit.MINUTES);
+    ```
+  </Tab>
+</Tabs>
+
+## Related topics
+
+- [Population](/core/population) - Loading strategies
+- [Expiration](/core/expiration) - Time-based removal
+- [Removal](/core/removal) - Handle refresh failures

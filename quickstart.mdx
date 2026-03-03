@@ -1,80 +1,322 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Build a high-performance cache in minutes with these step-by-step examples
 ---
 
-## Get started in three steps
+This guide will get you from zero to a working Caffeine cache in just a few minutes.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+Make sure you have:
+- Java 11 or higher installed
+- Caffeine added to your project (see [Installation](/installation))
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+## Basic cache usage
+
+<Steps>
+  <Step title="Import Caffeine classes">
+    Start by importing the core Caffeine classes:
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    ```java
+    import com.github.benmanes.caffeine.cache.Cache;
+    import com.github.benmanes.caffeine.cache.Caffeine;
+    ```
+  </Step>
+
+  <Step title="Build a cache">
+    Create a cache with a maximum size:
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+    ```java
+    Cache<String, String> cache = Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .build();
+    ```
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    This creates a cache that holds up to 10,000 entries. When the limit is exceeded, Caffeine evicts entries based on frequency and recency.
+  </Step>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+  <Step title="Add entries">
+    Store values in the cache:
+    
+    ```java
+    cache.put("user:123", "John Doe");
+    cache.put("user:456", "Jane Smith");
+    ```
+  </Step>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+  <Step title="Retrieve entries">
+    Get values from the cache:
+    
+    ```java
+    String user = cache.getIfPresent("user:123");
+    System.out.println(user); // Prints: John Doe
+    
+    String notFound = cache.getIfPresent("user:999");
+    System.out.println(notFound); // Prints: null
+    ```
+  </Step>
 
-### Step 3: Go live
+  <Step title="Compute on miss">
+    Load values automatically if not present:
+    
+    ```java
+    String user = cache.get("user:789", key -> {
+        // This function is called only if key is not in cache
+        return fetchUserFromDatabase(key);
+    });
+    ```
+    
+    The mapping function is called at most once per key, and the computation is atomic.
+  </Step>
+</Steps>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+## Loading cache
+
+<Note>
+Use a `LoadingCache` when you want the cache to automatically load missing entries using a consistent loading strategy.
+</Note>
+
+<Steps>
+  <Step title="Import LoadingCache">
+    ```java
+    import com.github.benmanes.caffeine.cache.Caffeine;
+    import com.github.benmanes.caffeine.cache.LoadingCache;
+    ```
+  </Step>
+
+  <Step title="Build with a loader">
+    Create a cache that automatically loads missing entries:
+    
+    ```java
+    LoadingCache<String, User> userCache = Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .build(key -> loadUserFromDatabase(key));
+    ```
+    
+    The loader function is called automatically whenever a key is not found in the cache.
+  </Step>
+
+  <Step title="Access entries">
+    Simply call `get()` - the cache handles loading automatically:
+    
+    ```java
+    // Loads from database if not in cache
+    User user = userCache.get("user:123");
+    
+    // Already cached, returns immediately
+    User sameUser = userCache.get("user:123");
+    ```
+  </Step>
+
+  <Step title="Bulk loading">
+    Load multiple entries efficiently:
+    
+    ```java
+    Map<String, User> users = userCache.getAll(
+        List.of("user:123", "user:456", "user:789")
+    );
+    ```
+    
+    <Tip>
+    Implement `CacheLoader.loadAll()` for even more efficient bulk loading from your data source.
+    </Tip>
+  </Step>
+</Steps>
+
+## Time-based expiration
+
+Expire entries after a fixed duration:
+
+<CodeGroup>
+```java Expire after write
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.LoadingCache;
+import java.time.Duration;
+
+LoadingCache<String, String> cache = Caffeine.newBuilder()
+    .expireAfterWrite(Duration.ofMinutes(5))
+    .build(key -> loadData(key));
+```
+
+```java Expire after access
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.LoadingCache;
+import java.time.Duration;
+
+LoadingCache<String, String> cache = Caffeine.newBuilder()
+    .expireAfterAccess(Duration.ofMinutes(10))
+    .build(key -> loadData(key));
+```
+
+```java Combined size and time
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.LoadingCache;
+import java.time.Duration;
+
+LoadingCache<String, String> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .expireAfterWrite(Duration.ofMinutes(5))
+    .build(key -> loadData(key));
+```
+</CodeGroup>
+
+**Expire after write**: Entries expire after a fixed duration from creation or last update.
+
+**Expire after access**: Entries expire after a fixed duration since last read or write.
+
+## Refresh entries
+
+Keep your cache warm by automatically refreshing stale entries:
+
+```java
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.LoadingCache;
+import java.time.Duration;
+
+LoadingCache<String, String> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .expireAfterWrite(Duration.ofMinutes(5))
+    .refreshAfterWrite(Duration.ofMinutes(1))
+    .build(key -> loadExpensiveData(key));
+```
+
+<Tip>
+When an entry is accessed after the refresh time, Caffeine asynchronously reloads it while returning the old value. This ensures requests remain fast while keeping data fresh.
+</Tip>
+
+## Complete example
+
+Here's a complete working example that demonstrates a real-world use case:
+
+```java
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.LoadingCache;
+import java.time.Duration;
+
+public class UserCacheExample {
+    
+    static class User {
+        String id;
+        String name;
+        String email;
+        
+        User(String id, String name, String email) {
+            this.id = id;
+            this.name = name;
+            this.email = email;
+        }
+        
+        @Override
+        public String toString() {
+            return "User{id='" + id + "', name='" + name + "', email='" + email + "'}";
+        }
+    }
+    
+    private static User loadUserFromDatabase(String userId) {
+        // Simulate database query
+        System.out.println("Loading user " + userId + " from database...");
+        try {
+            Thread.sleep(100); // Simulate network latency
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return new User(userId, "User " + userId, userId + "@example.com");
+    }
+    
+    public static void main(String[] args) {
+        // Create a loading cache with size and time-based eviction
+        LoadingCache<String, User> userCache = Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .expireAfterWrite(Duration.ofMinutes(10))
+            .recordStats() // Enable statistics
+            .build(key -> loadUserFromDatabase(key));
+        
+        // First access - loads from "database"
+        System.out.println("First access:");
+        User user1 = userCache.get("123");
+        System.out.println(user1);
+        
+        // Second access - returns cached value
+        System.out.println("\nSecond access:");
+        User user2 = userCache.get("123");
+        System.out.println(user2);
+        
+        // Load multiple users
+        System.out.println("\nBulk load:");
+        var users = userCache.getAll(java.util.List.of("456", "789", "123"));
+        users.forEach((id, user) -> System.out.println(user));
+        
+        // Print cache statistics
+        System.out.println("\nCache statistics:");
+        System.out.println(userCache.stats());
+    }
+}
+```
+
+Output:
+```
+First access:
+Loading user 123 from database...
+User{id='123', name='User 123', email='123@example.com'}
+
+Second access:
+User{id='123', name='User 123', email='123@example.com'}
+
+Bulk load:
+Loading user 456 from database...
+Loading user 789 from database...
+User{id='456', name='User 456', email='456@example.com'}
+User{id='789', name='User 789', email='789@example.com'}
+User{id='123', name='User 123', email='123@example.com'}
+
+Cache statistics:
+CacheStats{hitCount=1, missCount=3, loadSuccessCount=3, loadFailureCount=0, totalLoadTime=300000000, evictionCount=0, evictionWeight=0}
+```
+
+## Configuration options summary
+
+Here's a quick reference of common cache configurations:
+
+```java
+Cache<K, V> cache = Caffeine.newBuilder()
+    // Size-based eviction
+    .maximumSize(10_000)                              // Maximum 10k entries
+    
+    // Time-based expiration
+    .expireAfterWrite(Duration.ofMinutes(5))         // Expire 5 min after write
+    .expireAfterAccess(Duration.ofMinutes(10))       // Expire 10 min after access
+    
+    // Automatic refresh
+    .refreshAfterWrite(Duration.ofMinutes(1))        // Refresh after 1 minute
+    
+    // Performance monitoring
+    .recordStats()                                    // Enable statistics
+    
+    // Reference-based eviction
+    .weakKeys()                                       // Use weak references for keys
+    .softValues()                                     // Use soft references for values
+    
+    .build();
+```
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
+Now that you have a working cache, explore more advanced features:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Core concepts" icon="book" href="/core/population">
+    Learn about eviction policies, expiration strategies, and cache types
+  </Card>
+  
+  <Card title="API reference" icon="code" href="/api/caffeine">
+    Explore all configuration options and API methods
+  </Card>
+  
+  <Card title="Statistics" icon="chart-line" href="/core/statistics">
+    Monitor cache performance with built-in statistics
+  </Card>
+  
+  <Card title="Performance" icon="gauge" href="/guides/performance">
+    Learn tips and patterns for optimal performance
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

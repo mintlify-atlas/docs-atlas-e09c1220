@@ -1,0 +1,403 @@
+---
+title: RemovalListener
+description: Interface for receiving notifications when cache entries are removed
+---
+
+## Overview
+
+`RemovalListener` receives notifications when entries are removed from a cache. Removals can occur due to manual operations (invalidation, replacement), eviction (size limits, expiration), or garbage collection.
+
+Listeners are called concurrently by multiple threads and should be designed to handle concurrent execution efficiently.
+
+## Type Parameters
+
+<ParamField path="K" type="type parameter">
+  The most general type of keys this listener can listen for. Use `Object` if any key is acceptable.
+</ParamField>
+
+<ParamField path="V" type="type parameter">
+  The most general type of values this listener can listen for. Use `Object` if any value is acceptable.
+</ParamField>
+
+## Methods
+
+### onRemoval
+
+```java
+void onRemoval(@Nullable K key, @Nullable V value, RemovalCause cause)
+```
+
+Notifies the listener that a removal occurred at some point in the past.
+
+<ParamField path="key" type="K" nullable>
+  The key represented by this entry, or null if collected
+</ParamField>
+
+<ParamField path="value" type="V" nullable>
+  The value represented by this entry, or null if collected
+</ParamField>
+
+<ParamField path="cause" type="RemovalCause" required>
+  The reason for which the entry was removed
+</ParamField>
+
+<Warning>
+  This does not always signify that the key is now absent from the cache, as it may have already been re-added.
+</Warning>
+
+<Note>
+  The key and value may be null if they were garbage collected (when using weak or soft references).
+</Note>
+
+## RemovalCause Enum
+
+The `RemovalCause` enum indicates why an entry was removed:
+
+### EXPLICIT
+
+The entry was manually removed by the user through operations like:
+- `Cache.invalidate()`
+- `Cache.invalidateAll()`
+- `Map.remove()`
+- `Map.computeIfPresent()`
+- Collection view operations
+
+**Returns `false` for `wasEvicted()`**
+
+### REPLACED
+
+The entry value was replaced by the user through operations like:
+- `Cache.put()`
+- `Map.replace()`
+- `Map.compute()`
+- `LoadingCache.refresh()`
+
+**Returns `false` for `wasEvicted()`**
+
+### COLLECTED
+
+The entry was removed because its key or value was garbage collected. Occurs when using:
+- `Caffeine.weakKeys()`
+- `Caffeine.weakValues()`
+- `Caffeine.softValues()`
+
+**Returns `true` for `wasEvicted()`**
+
+### EXPIRED
+
+The entry expired based on time-based eviction policies:
+- `Caffeine.expireAfterWrite()`
+- `Caffeine.expireAfterAccess()`
+- `Caffeine.expireAfter(Expiry)`
+
+**Returns `true` for `wasEvicted()`**
+
+### SIZE
+
+The entry was evicted due to size constraints:
+- `Caffeine.maximumSize()`
+- `Caffeine.maximumWeight()`
+
+**Returns `true` for `wasEvicted()`**
+
+## Configuration
+
+Configure a `RemovalListener` using the Caffeine builder:
+
+```java
+Cache<Key, Value> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .removalListener((Key key, Value value, RemovalCause cause) -> {
+        System.out.printf("Removed %s=%s (cause=%s)%n", key, value, cause);
+    })
+    .build();
+```
+
+## Implementation Examples
+
+### Basic Logging Listener
+
+```java
+RemovalListener<String, User> listener = (key, value, cause) -> {
+    logger.info("Removed user {}: {} (cause: {})", key, value, cause);
+};
+
+Cache<String, User> cache = Caffeine.newBuilder()
+    .maximumSize(1_000)
+    .removalListener(listener)
+    .build();
+```
+
+### Cleanup Resources on Removal
+
+```java
+RemovalListener<String, DatabaseConnection> listener = (key, conn, cause) -> {
+    if (conn != null && cause.wasEvicted()) {
+        try {
+            conn.close();
+            logger.info("Closed connection for {}", key);
+        } catch (Exception e) {
+            logger.error("Error closing connection", e);
+        }
+    }
+};
+
+Cache<String, DatabaseConnection> cache = Caffeine.newBuilder()
+    .maximumSize(100)
+    .expireAfterAccess(Duration.ofMinutes(5))
+    .removalListener(listener)
+    .build();
+```
+
+### Tracking Eviction Statistics
+
+```java
+public class EvictionStats {
+    private final AtomicLong evictions = new AtomicLong();
+    private final AtomicLong expirations = new AtomicLong();
+    private final AtomicLong sizeEvictions = new AtomicLong();
+    private final AtomicLong explicit = new AtomicLong();
+    
+    public RemovalListener<String, Data> createListener() {
+        return (key, value, cause) -> {
+            switch (cause) {
+                case SIZE -> sizeEvictions.incrementAndGet();
+                case EXPIRED -> expirations.incrementAndGet();
+                case COLLECTED -> evictions.incrementAndGet();
+                case EXPLICIT -> explicit.incrementAndGet();
+                case REPLACED -> {} // Don't count replacements
+            }
+        };
+    }
+    
+    public long getTotalEvictions() {
+        return evictions.get() + expirations.get() + sizeEvictions.get();
+    }
+}
+
+EvictionStats stats = new EvictionStats();
+Cache<String, Data> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .expireAfterWrite(Duration.ofHours(1))
+    .removalListener(stats.createListener())
+    .build();
+```
+
+### Cascading Cache Invalidation
+
+```java
+Cache<String, User> userCache = Caffeine.newBuilder()
+    .maximumSize(1_000)
+    .build();
+
+Cache<String, UserProfile> profileCache = Caffeine.newBuilder()
+    .maximumSize(1_000)
+    .removalListener((String key, UserProfile profile, RemovalCause cause) -> {
+        if (cause == RemovalCause.EXPLICIT) {
+            // When profile is explicitly removed, also remove user
+            userCache.invalidate(key);
+        }
+    })
+    .build();
+```
+
+### Write-Through to Persistent Storage
+
+```java
+RemovalListener<String, Document> listener = (key, doc, cause) -> {
+    if (doc != null && doc.isModified() && cause.wasEvicted()) {
+        // Entry was evicted and has unsaved changes
+        try {
+            database.save(key, doc);
+            logger.info("Persisted modified document: {}", key);
+        } catch (Exception e) {
+            logger.error("Failed to persist document: {}", key, e);
+        }
+    }
+};
+
+Cache<String, Document> cache = Caffeine.newBuilder()
+    .maximumSize(500)
+    .removalListener(listener)
+    .build();
+```
+
+### Notification System
+
+```java
+RemovalListener<String, Session> listener = (sessionId, session, cause) -> {
+    if (session != null && cause == RemovalCause.EXPIRED) {
+        // Notify user that their session expired
+        notificationService.sendSessionExpiredNotification(
+            session.getUserId(),
+            "Your session has expired. Please log in again."
+        );
+    }
+};
+
+Cache<String, Session> sessionCache = Caffeine.newBuilder()
+    .expireAfterAccess(Duration.ofMinutes(30))
+    .removalListener(listener)
+    .build();
+```
+
+### Metrics Collection
+
+```java
+MeterRegistry registry = new SimpleMeterRegistry();
+
+RemovalListener<String, Data> listener = (key, value, cause) -> {
+    registry.counter("cache.removals", 
+        "cause", cause.name(),
+        "evicted", String.valueOf(cause.wasEvicted())
+    ).increment();
+};
+
+Cache<String, Data> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .removalListener(listener)
+    .recordStats()
+    .build();
+```
+
+## Best Practices
+
+### Do's
+
+- Keep listener logic fast and non-blocking
+- Use asynchronous processing for expensive operations
+- Check if key/value is null (may be collected)
+- Use `cause.wasEvicted()` to distinguish evictions from manual removals
+- Handle exceptions gracefully to avoid breaking cache operations
+- Use appropriate thread-safe data structures for shared state
+
+### Don'ts
+
+- Don't perform long-running operations synchronously
+- Avoid blocking I/O in the listener
+- Don't update the same cache from within the listener (can cause deadlock)
+- Avoid throwing uncaught exceptions
+- Don't assume the entry is still absent after removal
+- Avoid excessive synchronization that could impact performance
+
+## Asynchronous Listeners
+
+For expensive operations, use asynchronous processing:
+
+```java
+ExecutorService executor = Executors.newFixedThreadPool(4);
+
+RemovalListener<String, Data> listener = (key, value, cause) -> {
+    if (value != null && cause.wasEvicted()) {
+        executor.submit(() -> {
+            try {
+                performExpensiveCleanup(value);
+            } catch (Exception e) {
+                logger.error("Cleanup failed for {}", key, e);
+            }
+        });
+    }
+};
+
+Cache<String, Data> cache = Caffeine.newBuilder()
+    .maximumSize(10_000)
+    .removalListener(listener)
+    .build();
+```
+
+## Listener Execution
+
+### Synchronous Execution
+
+By default, removal listeners are executed synchronously during cache operations:
+
+```java
+Cache<String, Data> cache = Caffeine.newBuilder()
+    .removalListener((key, value, cause) -> {
+        // Executes synchronously on the thread that triggered removal
+        logger.info("Removed: {}", key);
+    })
+    .build();
+```
+
+### Asynchronous Execution
+
+Use an executor for asynchronous notification:
+
+```java
+Executor executor = Executors.newSingleThreadExecutor();
+
+Cache<String, Data> cache = Caffeine.newBuilder()
+    .removalListener((key, value, cause) -> {
+        logger.info("Removed: {}", key);
+    })
+    .executor(executor)
+    .build();
+```
+
+## Common Patterns
+
+### Filter by Removal Cause
+
+```java
+RemovalListener<String, Data> listener = (key, value, cause) -> {
+    switch (cause) {
+        case SIZE, EXPIRED -> handleEviction(key, value);
+        case EXPLICIT -> handleManualRemoval(key, value);
+        case REPLACED -> handleReplacement(key, value);
+        case COLLECTED -> handleGarbageCollection(key, value);
+    }
+};
+```
+
+### Only Process Evictions
+
+```java
+RemovalListener<String, Data> listener = (key, value, cause) -> {
+    if (cause.wasEvicted() && value != null) {
+        // Only process automatic evictions
+        handleEvictedEntry(key, value);
+    }
+};
+```
+
+### Chain Multiple Listeners
+
+```java
+RemovalListener<String, Data> loggingListener = 
+    (key, value, cause) -> logger.info("Removed: {}", key);
+
+RemovalListener<String, Data> metricsListener = 
+    (key, value, cause) -> metrics.recordRemoval(cause);
+
+RemovalListener<String, Data> compositeListener = (key, value, cause) -> {
+    loggingListener.onRemoval(key, value, cause);
+    metricsListener.onRemoval(key, value, cause);
+};
+
+Cache<String, Data> cache = Caffeine.newBuilder()
+    .removalListener(compositeListener)
+    .build();
+```
+
+## When to Use
+
+Use `RemovalListener` when:
+
+- You need to clean up resources when entries are evicted
+- You want to track eviction patterns and statistics
+- You need to persist unsaved changes before eviction
+- You want to implement cascading invalidation
+- You need to notify external systems of cache changes
+- You want to implement custom metrics or monitoring
+
+## Related Interfaces
+
+- [Caffeine Builder](/api/caffeine) - Configuration with `removalListener()`
+- [Eviction](/core/eviction) - Eviction policies guide
+- [Statistics](/core/statistics) - Built-in statistics
+
+## See Also
+
+- [Removal](/core/removal) - Removal notifications guide
+- [Expiration](/core/expiration) - Expiration policies
